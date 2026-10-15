@@ -32,6 +32,6 @@ export interface ShipmentResult {
   pallets: PalletPlan[];
   totalCBM: number;
   totalGrossKg: number;
-  containerRecommendation: 'FCL_20FT' | 'FCL_40FT' | 'MULTI_CONTAINER';
+  containerRecommendation: 'LCL' | 'FCL_20FT' | 'FCL_40FT' | 'MULTI_CONTAINER';
   warnings: string[];
 }

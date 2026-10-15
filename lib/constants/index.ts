@@ -35,5 +35,10 @@ export const MAX_STACK_HEIGHT_MM = 2350;
 // Wooden pallet base height (mm), added on top of stacked box height
 export const PALLET_BASE_HEIGHT_MM = 120;
 
+// Recommendation bands by total CBM:
+// ≤ LCL_MAX_CBM → LCL, ≤ FCL_20FT_BAND_MAX_CBM → 20ft, ≤ 40ft maxCBM → 40ft, above → multiple containers
+export const LCL_MAX_CBM = 15;
+export const FCL_20FT_BAND_MAX_CBM = 25;
+
 // Container internal lengths (mm)
 export const CONTAINER_LENGTH_MM = { FCL_20FT: 5898, FCL_40FT: 11998 };

@@ -6,6 +6,8 @@ import {
 import {
   CONTAINERS,
   CONTAINER_LENGTH_MM,
+  LCL_MAX_CBM,
+  FCL_20FT_BAND_MAX_CBM,
   PUMP_PALLET_WIDTH,
   MOTOR_PALLET_WIDTH,
   WOOD_WEIGHT,
@@ -160,10 +162,14 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
     }
   });
 
-  // Container recommendation
+  // Container recommendation — LCL band first, then FCL bands by CBM.
+  // FCL picks still respect payload limits and pallet length (requires40ft).
   let containerRecommendation: ShipmentResult['containerRecommendation'];
-  if (
-    totalCBM <= CONTAINERS.FCL_20FT.maxCBM &&
+  if (totalCBM <= LCL_MAX_CBM) {
+    containerRecommendation = 'LCL';
+    warnings.push('LCL recommended — volume too small for a full container. Consolidation charges will apply.');
+  } else if (
+    totalCBM <= FCL_20FT_BAND_MAX_CBM &&
     totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg &&
     !requires40ft
   ) {

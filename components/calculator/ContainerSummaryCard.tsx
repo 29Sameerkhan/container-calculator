@@ -10,6 +10,7 @@ interface Props {
 }
 
 const CONTAINER_LABELS: Record<ShipmentResult['containerRecommendation'], { label: string; color: string; bg: string }> = {
+  LCL: { label: 'LCL', color: 'text-yellow-800', bg: 'bg-yellow-100 border-yellow-200' },
   FCL_20FT: { label: '20ft FCL', color: 'text-green-700', bg: 'bg-green-50 border-green-200' },
   FCL_40FT: { label: '40ft FCL', color: 'text-blue-700', bg: 'bg-blue-50 border-blue-200' },
   MULTI_CONTAINER: { label: 'Multiple Containers', color: 'text-orange-700', bg: 'bg-orange-50 border-orange-200' },
@@ -21,10 +22,12 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
     ? CONTAINERS.FCL_20FT
     : CONTAINERS.FCL_40FT;
 
-  const cbmUtil = result.containerRecommendation !== 'MULTI_CONTAINER'
+  // Utilisation only makes sense against a single full container
+  const isFcl = result.containerRecommendation === 'FCL_20FT' || result.containerRecommendation === 'FCL_40FT';
+  const cbmUtil = isFcl
     ? ((result.totalCBM / container.maxCBM) * 100).toFixed(1)
     : null;
-  const wtUtil = result.containerRecommendation !== 'MULTI_CONTAINER'
+  const wtUtil = isFcl
     ? ((result.totalGrossKg / container.maxPayloadKg) * 100).toFixed(1)
     : null;
 

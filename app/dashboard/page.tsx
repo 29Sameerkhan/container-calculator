@@ -36,7 +36,6 @@ function DashboardInner() {
   const [calculatedItems, setCalculatedItems] = useState<OrderItem[]>([]);
   // Rows the form starts with after loading a saved calculation
   const [initialRows, setInitialRows] = useState<OrderItem[]>([]);
-  const [editingId, setEditingId] = useState<number | null>(null);
   const [editBanner, setEditBanner] = useState<string | null>(null);
   const [bannerMode, setBannerMode] = useState<'edit' | 'duplicate' | null>(null);
 
@@ -69,13 +68,11 @@ function DashboardInner() {
         setSavedId(null);
         setResetKey(k => k + 1);
         setBannerMode(mode);
-        if (mode === 'edit') {
-          setEditingId(calc.id);
-          setEditBanner(`Editing #${calc.id} — ${calc.customerName || 'No customer'}`);
-        } else {
-          setEditingId(null);
-          setEditBanner(`Duplicated from #${calc.id} — ${calc.customerName || 'No customer'}`);
-        }
+        setEditBanner(
+          mode === 'edit'
+            ? `Editing #${calc.id} — ${calc.customerName || 'No customer'}`
+            : `Duplicated from #${calc.id} — ${calc.customerName || 'No customer'}`
+        );
       })
       .catch(() => { if (!cancelled) setError(`Could not load calculation #${id}`); });
 
@@ -122,7 +119,6 @@ function DashboardInner() {
     setResetKey(k => k + 1);
     setSaveStatus('idle');
     setSavedId(null);
-    setEditingId(null);
     setEditBanner(null);
     setBannerMode(null);
     router.replace('/dashboard');
@@ -132,11 +128,11 @@ function DashboardInner() {
     if (!result) return;
     setSaveStatus('saving');
     try {
-      const body = { customerName, orderRef, items: calculatedItems, result };
+      // Always saves a new record, even when working from an edited calculation
       const res = await fetch('/api/save-calculation', {
-        method: editingId ? 'PUT' : 'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingId ? { ...body, id: editingId } : body),
+        body: JSON.stringify({ customerName, orderRef, items: calculatedItems, result }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Save failed');
@@ -276,10 +272,10 @@ function DashboardInner() {
                 ? 'Saving…'
                 : saveStatus === 'saved'
                   ? '✓ Saved'
-                  : editingId ? '💾 Update Calculation' : '💾 Save Calculation'}
+                  : '💾 Save Calculation'}
             </button>
             {saveStatus === 'saved' && savedId && (
-              <p className="text-sm text-green-700">{editingId ? `Updated #${savedId}` : `Saved as #${savedId}`}</p>
+              <p className="text-sm text-green-700">Saved as #{savedId}</p>
             )}
             {saveStatus === 'error' && (
               <p className="text-sm text-red-600">Save failed — check console</p>

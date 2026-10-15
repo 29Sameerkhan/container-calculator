@@ -16,12 +16,14 @@ interface CalculationRow {
 }
 
 const CONTAINER_BADGE: Record<string, CSSProperties> = {
+  LCL: { background: '#fef9c3', color: '#854d0e' },
   FCL_20FT: { background: '#dcfce7', color: '#15803d' },
   FCL_40FT: { background: '#dbeafe', color: '#1d4ed8' },
   MULTI_CONTAINER: { background: '#ffedd5', color: '#c2410c' },
 };
 
 const CONTAINER_LABEL: Record<string, string> = {
+  LCL: 'LCL',
   FCL_20FT: '20ft FCL',
   FCL_40FT: '40ft FCL',
   MULTI_CONTAINER: 'Multi-Container',
