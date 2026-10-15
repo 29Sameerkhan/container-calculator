@@ -27,6 +27,25 @@ function getFamilyOptions(productType: OrderItem['productType']): string[] {
   return Object.keys(PUMP_PALLET_WIDTH);
 }
 
+const NUMBER_FIELDS: { field: 'quantity' | 'boxLengthMm' | 'boxWidthMm' | 'boxHeightMm' | 'netWeightKg' | 'grossWeightKg'; label: string; className?: string }[] = [
+  { field: 'quantity', label: 'Qty' },
+  { field: 'boxLengthMm', label: 'L (mm)' },
+  { field: 'boxWidthMm', label: 'W (mm)' },
+  { field: 'boxHeightMm', label: 'H (mm)' },
+  // Net weight is optional, so it is hidden on small screens
+  { field: 'netWeightKg', label: 'Net (kg)', className: 'hidden md:block' },
+  { field: 'grossWeightKg', label: 'Gross (kg)' },
+];
+
+// Shared column layout for the heading row and each product row:
+// wraps to 2 / 4 columns on small screens, single line of fractional columns on large screens
+const ROW_COLS =
+  'grid-cols-2 sm:grid-cols-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1.1fr)_repeat(6,minmax(0,1fr))_1.5rem] gap-2';
+
+const FIELD_LABEL = 'block lg:hidden text-[11px] text-gray-500 uppercase tracking-wide mb-0.5';
+const INPUT =
+  'w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400';
+
 const emptyRow = (): Omit<OrderItem, 'palletFamily'> & { palletFamily: string } => ({
   productCode: '',
   productType: 'pump',
@@ -102,82 +121,83 @@ export default function OrderItemForm({ setItems }: Props) {
         </button>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
-              <th className="text-left pb-2 pr-2 font-medium">Product Code</th>
-              <th className="text-left pb-2 pr-2 font-medium">Type</th>
-              <th className="text-left pb-2 pr-2 font-medium">Family</th>
-              <th className="text-left pb-2 pr-2 font-medium w-16">Qty</th>
-              <th className="text-left pb-2 pr-2 font-medium w-20">L (mm)</th>
-              <th className="text-left pb-2 pr-2 font-medium w-20">W (mm)</th>
-              <th className="text-left pb-2 pr-2 font-medium w-20">H (mm)</th>
-              <th className="text-left pb-2 pr-2 font-medium w-24">Net (kg)</th>
-              <th className="text-left pb-2 pr-2 font-medium w-24">Gross (kg)</th>
-              <th className="pb-2 w-8"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {rows.map((row, i) => (
-              <tr key={i} className={isComplete(row) ? 'bg-green-50/30' : ''}>
-                <td className="py-2 pr-2">
-                  <input
-                    type="text"
-                    value={row.productCode}
-                    onChange={e => updateRow(i, 'productCode', e.target.value)}
-                    onBlur={handleBlur}
-                    placeholder="SK77-50-NK80X65…"
-                    className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 min-w-[140px]"
-                  />
-                </td>
-                <td className="py-2 pr-2">
-                  <select
-                    value={row.productType}
-                    onChange={e => { updateRow(i, 'productType', e.target.value); handleBlur(); }}
-                    className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                  >
-                    {PRODUCT_TYPES.map(t => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
-                    ))}
-                  </select>
-                </td>
-                <td className="py-2 pr-2">
-                  <select
-                    value={row.palletFamily}
-                    onChange={e => { updateRow(i, 'palletFamily', e.target.value); handleBlur(); }}
-                    className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                  >
-                    {getFamilyOptions(row.productType).map(f => (
-                      <option key={f} value={f}>{f}</option>
-                    ))}
-                  </select>
-                </td>
-                {(['quantity', 'boxLengthMm', 'boxWidthMm', 'boxHeightMm', 'netWeightKg', 'grossWeightKg'] as const).map(field => (
-                  <td key={field} className="py-2 pr-2">
-                    <input
-                      type="number"
-                      value={row[field] === 0 ? '' : row[field]}
-                      onChange={e => updateRow(i, field, parseFloat(e.target.value) || 0)}
-                      onBlur={handleBlur}
-                      min={0}
-                      placeholder="0"
-                      className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    />
-                  </td>
+      {/* Column headings — only on wide screens; narrower screens show a label per field */}
+      <div className={`hidden lg:grid ${ROW_COLS} text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100 pb-2`}>
+        <span className="font-medium">Product Code</span>
+        <span className="font-medium">Type</span>
+        <span className="font-medium">Family</span>
+        {NUMBER_FIELDS.map(f => (
+          <span key={f.field} className={`font-medium ${f.className ?? ''}`}>{f.label}</span>
+        ))}
+        <span />
+      </div>
+
+      <div className="space-y-3 lg:space-y-0 lg:divide-y lg:divide-gray-50">
+        {rows.map((row, i) => (
+          <div
+            key={i}
+            className={`grid ${ROW_COLS} items-end rounded-lg border border-gray-100 p-3 lg:rounded-none lg:border-0 lg:px-0 lg:py-2 ${isComplete(row) ? 'bg-green-50/30' : ''}`}
+          >
+            <div className="col-span-2 sm:col-span-4 lg:col-span-1">
+              <label className={FIELD_LABEL}>Product Code</label>
+              <input
+                type="text"
+                value={row.productCode}
+                onChange={e => updateRow(i, 'productCode', e.target.value)}
+                onBlur={handleBlur}
+                placeholder="SK77-50-NK80X65…"
+                className={INPUT}
+              />
+            </div>
+            <div>
+              <label className={FIELD_LABEL}>Type</label>
+              <select
+                value={row.productType}
+                onChange={e => { updateRow(i, 'productType', e.target.value); handleBlur(); }}
+                className={INPUT}
+              >
+                {PRODUCT_TYPES.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
-                <td className="py-2">
-                  <button
-                    onClick={() => removeRow(i)}
-                    className="text-gray-300 hover:text-red-500 transition-colors"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </td>
-              </tr>
+              </select>
+            </div>
+            <div>
+              <label className={FIELD_LABEL}>Family</label>
+              <select
+                value={row.palletFamily}
+                onChange={e => { updateRow(i, 'palletFamily', e.target.value); handleBlur(); }}
+                className={INPUT}
+              >
+                {getFamilyOptions(row.productType).map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+            {NUMBER_FIELDS.map(({ field, label, className }) => (
+              <div key={field} className={className}>
+                <label className={FIELD_LABEL}>{label}</label>
+                <input
+                  type="number"
+                  value={row[field] === 0 ? '' : row[field]}
+                  onChange={e => updateRow(i, field, parseFloat(e.target.value) || 0)}
+                  onBlur={handleBlur}
+                  min={0}
+                  placeholder="0"
+                  className={INPUT}
+                />
+              </div>
             ))}
-          </tbody>
-        </table>
+            <div className="flex justify-end lg:justify-center pb-1">
+              <button
+                onClick={() => removeRow(i)}
+                aria-label="Remove line"
+                className="text-gray-300 hover:text-red-500 transition-colors"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

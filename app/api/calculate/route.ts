@@ -7,12 +7,12 @@ const OrderItemSchema = z.object({
   productCode: z.string().min(1),
   productType: z.enum(['pump', 'motor-V4', 'motor-V6', 'controller', 'spare']),
   palletFamily: z.string().min(1),
-  quantity: z.number().int().positive(),
-  boxLengthMm: z.number().positive(),
-  boxWidthMm: z.number().positive(),
-  boxHeightMm: z.number().positive(),
+  quantity: z.number().int().min(1),
+  boxLengthMm: z.number().min(1),
+  boxWidthMm: z.number().min(1),
+  boxHeightMm: z.number().min(1),
   netWeightKg: z.number().min(0),
-  grossWeightKg: z.number().positive(),
+  grossWeightKg: z.number().min(0.01),
   weightManualEntry: z.boolean().optional(),
 });
 
