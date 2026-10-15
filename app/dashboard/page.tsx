@@ -64,6 +64,12 @@ function DashboardInner() {
   const [calculatedOrders, setCalculatedOrders] = useState<ShipmentOrder[]>([]);
   const [editBanner, setEditBanner] = useState<string | null>(null);
   const [bannerMode, setBannerMode] = useState<'edit' | 'duplicate' | null>(null);
+  // Pending auto-reset after a save; cancelled if the page is left first, so it
+  // can't pull the user back to /dashboard from another page
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
 
   const isMultiOrder = orders.length > 1;
   const liveRows = (order: OrderDraft) => rowsByOrder.current.get(order.id) ?? order.items;
@@ -211,6 +217,8 @@ function DashboardInner() {
       if (!res.ok) throw new Error(data.error || 'Save failed');
       setSavedId(data.id);
       setSaveStatus('saved');
+      // Clear the form for the next calculation once the confirmation has been seen
+      resetTimer.current = setTimeout(handleReset, 2000);
     } catch (e) {
       console.error(e);
       setSaveStatus('error');
