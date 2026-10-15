@@ -201,6 +201,7 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
   // Container recommendation — LCL band first, then FCL bands by CBM.
   // FCL picks still respect payload limits and pallet length (requires40ft).
   let containerRecommendation: ShipmentResult['containerRecommendation'];
+  let containersNeeded: number | undefined;
   if (totalCBM <= LCL_MAX_CBM) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for a full container. Consolidation charges will apply.');
@@ -217,7 +218,13 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
     containerRecommendation = 'FCL_40FT';
   } else {
     containerRecommendation = 'MULTI_CONTAINER';
-    warnings.push('Shipment exceeds 40ft FCL limits — coordinate with freight forwarder for split shipment');
+    const containersByVolume = Math.ceil(totalCBM / CONTAINERS.FCL_40FT.maxCBM);
+    const containersByWeight = Math.ceil(totalGrossKg / CONTAINERS.FCL_40FT.maxPayloadKg);
+    containersNeeded = Math.max(containersByVolume, containersByWeight);
+    const limitingFactor = containersByVolume >= containersByWeight ? 'volume' : 'weight';
+    warnings.push(
+      `Requires approximately ${containersNeeded} × 40ft FCL containers — limited by ${limitingFactor}. Coordinate with freight forwarder for split shipment.`
+    );
   }
 
   // Guard: a pallet longer than 20ft can never ship in a 20ft
@@ -244,6 +251,7 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
     totalCBM: Math.round(totalCBM * 1000) / 1000,
     totalGrossKg: Math.round(totalGrossKg * 10) / 10,
     containerRecommendation,
+    ...(containersNeeded !== undefined && { containersNeeded }),
     warnings,
   };
 }

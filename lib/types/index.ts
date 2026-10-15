@@ -53,5 +53,7 @@ export interface ShipmentResult {
   totalCBM: number;
   totalGrossKg: number;
   containerRecommendation: 'LCL' | 'FCL_20FT' | 'FCL_40FT' | 'MULTI_CONTAINER';
+  // Estimated 40ft containers needed; set only for MULTI_CONTAINER
+  containersNeeded?: number;
   warnings: string[];
 }

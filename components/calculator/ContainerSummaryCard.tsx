@@ -1,7 +1,34 @@
 'use client';
 
-import { ShipmentResult } from '@/lib/types';
+import { PalletPlan, ShipmentResult } from '@/lib/types';
 import { CONTAINERS } from '@/lib/constants';
+
+interface ContainerSplit {
+  container: number;
+  firstPalletId: string;
+  lastPalletId: string;
+  cbm: number;
+  grossKg: number;
+}
+
+// Rough even split of pallets across N containers by position in the list.
+// Not a load plan: a chunk can exceed a 40ft's limits, which the table flags.
+function splitPallets(pallets: PalletPlan[], containers: number): ContainerSplit[] {
+  const perContainer = Math.ceil(pallets.length / containers);
+  const splits: ContainerSplit[] = [];
+  for (let i = 0; i < containers; i++) {
+    const chunk = pallets.slice(i * perContainer, (i + 1) * perContainer);
+    if (chunk.length === 0) break;
+    splits.push({
+      container: i + 1,
+      firstPalletId: chunk[0].palletId,
+      lastPalletId: chunk[chunk.length - 1].palletId,
+      cbm: Math.round(chunk.reduce((s, p) => s + p.cbm, 0) * 1000) / 1000,
+      grossKg: Math.round(chunk.reduce((s, p) => s + p.totalGrossKg, 0) * 10) / 10,
+    });
+  }
+  return splits;
+}
 
 interface Props {
   result: ShipmentResult;
@@ -18,6 +45,12 @@ const CONTAINER_LABELS: Record<ShipmentResult['containerRecommendation'], { labe
 
 export default function ContainerSummaryCard({ result, customerName, orderRef }: Props) {
   const rec = CONTAINER_LABELS[result.containerRecommendation];
+  const isMulti = result.containerRecommendation === 'MULTI_CONTAINER';
+  const label = isMulti ? `~${result.containersNeeded ?? '?'} × 40ft Containers` : rec.label;
+  // Results saved before containersNeeded existed have no split to show
+  const splits = isMulti && result.containersNeeded
+    ? splitPallets(result.pallets, result.containersNeeded)
+    : [];
   const container = result.containerRecommendation === 'FCL_20FT'
     ? CONTAINERS.FCL_20FT
     : CONTAINERS.FCL_40FT;
@@ -36,7 +69,7 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
       <div className="flex items-start justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">Recommendation</p>
-          <p className={`text-3xl font-bold ${rec.color}`}>{rec.label}</p>
+          <p className={`text-3xl font-bold ${rec.color}`}>{label}</p>
           {customerName && (
             <p className="text-sm text-gray-600 mt-1">{customerName}{orderRef ? ` · ${orderRef}` : ''}</p>
           )}
@@ -75,6 +108,58 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
           </p>
         </div>
       </div>
+
+      {/* Suggested split across containers — only for MULTI_CONTAINER */}
+      {splits.length > 0 && (
+        <div className="mt-4 rounded-xl overflow-hidden border border-blue-100 bg-white">
+          <p className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white" style={{ background: '#1E4D8C' }}>
+            Suggested Split
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="uppercase tracking-wide border-b border-blue-100" style={{ color: '#1E4D8C', background: '#f0f4ff' }}>
+                  <th className="text-left px-4 py-2 font-semibold">Container</th>
+                  <th className="text-left px-4 py-2 font-semibold">Pallets</th>
+                  <th className="text-right px-4 py-2 font-semibold">CBM</th>
+                  <th className="text-right px-4 py-2 font-semibold">Gross KG</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-blue-50">
+                {splits.map(s => {
+                  const overCbm = s.cbm > CONTAINERS.FCL_40FT.maxCBM;
+                  const overKg = s.grossKg > CONTAINERS.FCL_40FT.maxPayloadKg;
+                  return (
+                    <tr key={s.container}>
+                      <td className="px-4 py-2 font-semibold" style={{ color: '#1E4D8C' }}>Container {s.container}</td>
+                      <td className="px-4 py-2 font-mono text-gray-700">
+                        {s.firstPalletId === s.lastPalletId ? s.firstPalletId : `${s.firstPalletId} to ${s.lastPalletId}`}
+                      </td>
+                      <td
+                        className={`px-4 py-2 text-right font-mono ${overCbm ? 'text-red-600 font-semibold' : ''}`}
+                        title={overCbm ? `Over the 40ft limit of ${CONTAINERS.FCL_40FT.maxCBM} m³` : undefined}
+                      >
+                        {s.cbm}
+                      </td>
+                      <td
+                        className={`px-4 py-2 text-right ${overKg ? 'text-red-600 font-semibold' : ''}`}
+                        title={overKg ? `Over the 40ft payload of ${CONTAINERS.FCL_40FT.maxPayloadKg.toLocaleString()} kg` : undefined}
+                      >
+                        {s.grossKg.toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {splits.some(s => s.cbm > CONTAINERS.FCL_40FT.maxCBM || s.grossKg > CONTAINERS.FCL_40FT.maxPayloadKg) && (
+            <p className="px-4 py-2 text-xs text-red-600 border-t border-blue-50">
+              Values in red exceed a 40ft container — rebalance pallets before booking.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Per-order split — only for consolidated shipments. Results saved before
           perCustomer existed have no such field, hence the fallback. */}
