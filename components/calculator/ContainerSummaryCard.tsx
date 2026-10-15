@@ -76,6 +76,47 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
         </div>
       </div>
 
+      {/* Per-order split — only for consolidated shipments. Results saved before
+          perCustomer existed have no such field, hence the fallback. */}
+      {(result.perCustomer ?? []).length > 1 && (
+        <div className="mt-4 rounded-xl overflow-hidden border border-blue-100 bg-white">
+          <p
+            className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white"
+            style={{ background: 'linear-gradient(90deg, #1E4D8C 0%, #1a3f74 100%)' }}
+          >
+            Per Customer Breakdown
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="uppercase tracking-wide border-b border-blue-100" style={{ color: '#1E4D8C', background: '#f0f4ff' }}>
+                  <th className="text-left px-4 py-2 font-semibold">Customer</th>
+                  <th className="text-left px-4 py-2 font-semibold">Order Ref</th>
+                  <th className="text-right px-4 py-2 font-semibold">CBM</th>
+                  <th className="text-right px-4 py-2 font-semibold">Gross KG</th>
+                  <th className="text-right px-4 py-2 font-semibold">Pallets</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-blue-50">
+                {result.perCustomer.map((c, i) => (
+                  <tr key={`${c.customerName}-${c.orderRef}-${i}`}>
+                    <td className="px-4 py-2 font-medium text-gray-800">
+                      {c.customerName || <span className="text-gray-400 italic">—</span>}
+                    </td>
+                    <td className="px-4 py-2 text-gray-600">
+                      {c.orderRef || <span className="text-gray-400 italic">—</span>}
+                    </td>
+                    <td className="px-4 py-2 text-right font-mono">{c.totalCBM}</td>
+                    <td className="px-4 py-2 text-right">{c.totalGrossKg.toLocaleString()}</td>
+                    <td className="px-4 py-2 text-right font-semibold" style={{ color: '#1E4D8C' }}>{c.palletCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {result.warnings.length > 0 && (
         <div className="mt-4 space-y-1.5">
           {result.warnings.map((w, i) => (

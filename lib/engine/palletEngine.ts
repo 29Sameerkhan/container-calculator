@@ -1,6 +1,8 @@
 import {
+  CustomerSummary,
   OrderItem,
   PalletPlan,
+  ShipmentOrder,
   ShipmentResult,
 } from '@/lib/types';
 import {
@@ -70,12 +72,18 @@ export function computePalletGeometry(
   return { lengthMm, heightMm, unitsPerRow, rows, layers };
 }
 
-// ─── STEP 4: Build pallet plans from a list of order items ───────────────────
-export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
+// ─── STEP 4: Build pallet plans from all orders' items ───────────────────────
+export function buildPalletPlans(orders: ShipmentOrder[]): PalletPlan[] {
   const pallets: PalletPlan[] = [];
   const MAX_PALLET_LENGTH_MM = CONTAINER_LENGTH_MM.FCL_40FT;
 
-  items.forEach((item, itemIndex) => {
+  // Flatten items across orders, keeping each item's owner; numbering runs
+  // across the whole shipment so pallet IDs stay unique
+  const lines = orders.flatMap(order =>
+    order.items.map(item => ({ item, customerName: order.customerName, orderRef: order.orderRef }))
+  );
+
+  lines.forEach(({ item, customerName, orderRef }, itemIndex) => {
     const palletNumber = String(itemIndex + 1).padStart(2, '0');
     const palletWidthMm = resolvePalletWidth(item);
     const { heightMm, unitsPerRow, layers } = computePalletGeometry(item, palletWidthMm);
@@ -114,6 +122,8 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
 
       pallets.push({
         palletId: `SK-${palletNumber}${splitIndex > 1 ? `-P${splitIndex}` : ''}`,
+        customerName,
+        orderRef,
         family: item.palletFamily,
         productCode: item.productCode,
         quantity: unitsThisPallet,
@@ -136,9 +146,35 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
   return pallets;
 }
 
+// ─── Per-order totals, in the order the orders were given ────────────────────
+// Orders are matched by customerName + orderRef, so two orders from the same
+// customer get separate rows; orders with identical name and ref are merged.
+function summariseByOrder(orders: ShipmentOrder[], pallets: PalletPlan[]): CustomerSummary[] {
+  const key = (customerName: string, orderRef: string) => `${customerName}\u0000${orderRef}`;
+  const summaries = new Map<string, CustomerSummary>();
+
+  for (const { customerName, orderRef } of orders) {
+    if (!summaries.has(key(customerName, orderRef))) {
+      summaries.set(key(customerName, orderRef), { customerName, orderRef, totalCBM: 0, totalGrossKg: 0, palletCount: 0 });
+    }
+  }
+  for (const p of pallets) {
+    const s = summaries.get(key(p.customerName, p.orderRef))!;
+    s.totalCBM += p.cbm;
+    s.totalGrossKg += p.totalGrossKg;
+    s.palletCount += 1;
+  }
+
+  return Array.from(summaries.values()).map(s => ({
+    ...s,
+    totalCBM: Math.round(s.totalCBM * 1000) / 1000,
+    totalGrossKg: Math.round(s.totalGrossKg * 10) / 10,
+  }));
+}
+
 // ─── STEP 5: Aggregate + recommend container ─────────────────────────────────
-export function computeShipment(items: OrderItem[]): ShipmentResult {
-  const pallets = buildPalletPlans(items);
+export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
+  const pallets = buildPalletPlans(orders);
   const warnings: string[] = [];
 
   const totalCBM = pallets.reduce((sum, p) => sum + p.cbm, 0);
@@ -204,6 +240,7 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
 
   return {
     pallets,
+    perCustomer: summariseByOrder(orders, pallets),
     totalCBM: Math.round(totalCBM * 1000) / 1000,
     totalGrossKg: Math.round(totalGrossKg * 10) / 10,
     containerRecommendation,

@@ -1,17 +1,16 @@
 'use client';
 
-import { useEffect, useState, type MutableRefObject } from 'react';
+import { useState } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
 import { Trash2, Plus } from 'lucide-react';
 
 interface Props {
-  items: OrderItem[];
-  setItems: (items: OrderItem[]) => void;
-  // Always holds the latest rows, written synchronously on every change;
-  // the dashboard reads it when Calculate is clicked
-  rowsRef: MutableRefObject<OrderItem[]>;
-  // Rows to start with (e.g. a saved calculation being edited); read on mount only
+  // Called synchronously with the full rows array on every change, so the
+  // parent always holds the latest rows when Calculate is clicked
+  onRowsChange: (rows: OrderItem[]) => void;
+  // Rows to start with (e.g. a saved calculation being edited); read on mount only.
+  // The parent already knows these, so onRowsChange is not called for them.
   initialRows?: OrderItem[];
 }
 
@@ -81,21 +80,14 @@ export function isComplete(row: OrderItem): boolean {
   );
 }
 
-export default function OrderItemForm({ setItems, rowsRef, initialRows }: Props) {
-  const [rows, setRows] = useState<OrderItem[]>(() => {
-    const start = initialRows?.length ? initialRows : [emptyRow() as OrderItem];
-    rowsRef.current = start;
-    return start;
-  });
+export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
+  const [rows, setRows] = useState<OrderItem[]>(() =>
+    initialRows?.length ? initialRows : [emptyRow() as OrderItem]
+  );
 
-  // Keep the parent's items in sync for display (button visibility, line count)
-  useEffect(() => {
-    setItems(rows.filter(isComplete));
-  }, [rows, setItems]);
-
-  // Every row change goes through here so rowsRef is updated immediately
+  // Every row change goes through here so the parent is told immediately
   function commitRows(updated: OrderItem[]) {
-    rowsRef.current = updated;
+    onRowsChange(updated);
     setRows(updated);
   }
 

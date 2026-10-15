@@ -14,7 +14,7 @@ const SaveSchema = z.object({
     totalGrossKg: z.number(),
     containerRecommendation: z.string(),
     warnings: z.array(z.string()),
-  }),
+  }).passthrough(), // keep perCustomer and any other result fields in result_json
 });
 
 export async function POST(req: NextRequest) {

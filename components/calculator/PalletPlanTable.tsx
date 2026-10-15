@@ -7,6 +7,10 @@ interface Props {
 }
 
 export default function PalletPlanTable({ pallets }: Props) {
+  // Customer column only when at least one pallet is tagged with a customer
+  // (results saved before pallets carried customerName have none)
+  const showCustomer = pallets.some(p => !!p.customerName);
+
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
       <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
@@ -17,6 +21,7 @@ export default function PalletPlanTable({ pallets }: Props) {
           <thead>
             <tr className="text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
               <th className="text-left pb-2 pr-4 font-medium">Pallet</th>
+              {showCustomer && <th className="text-left pb-2 pr-4 font-medium">Customer</th>}
               <th className="text-left pb-2 pr-4 font-medium">Product</th>
               <th className="text-left pb-2 pr-4 font-medium">Family</th>
               <th className="text-right pb-2 pr-4 font-medium">Qty</th>
@@ -31,6 +36,11 @@ export default function PalletPlanTable({ pallets }: Props) {
             {pallets.map((p) => (
               <tr key={p.palletId} className="hover:bg-gray-50 transition-colors">
                 <td className="py-2.5 pr-4 font-mono text-xs font-semibold text-gray-700">{p.palletId}</td>
+                {showCustomer && (
+                  <td className="py-2.5 pr-4 text-xs text-gray-800 max-w-[180px] truncate" title={p.orderRef ? `${p.customerName} · ${p.orderRef}` : p.customerName}>
+                    {p.customerName || <span className="text-gray-400 italic">—</span>}
+                  </td>
+                )}
                 <td className="py-2.5 pr-4 text-xs text-gray-600 max-w-[180px] truncate" title={p.productCode}>{p.productCode}</td>
                 <td className="py-2.5 pr-4">
                   <span className="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">{p.family}</span>
@@ -48,7 +58,7 @@ export default function PalletPlanTable({ pallets }: Props) {
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-gray-200 font-semibold">
-              <td className="pt-2.5 pr-4 text-xs text-gray-700" colSpan={3}>TOTAL</td>
+              <td className="pt-2.5 pr-4 text-xs text-gray-700" colSpan={showCustomer ? 4 : 3}>TOTAL</td>
               <td className="pt-2.5 pr-4 text-right text-xs">
                 {pallets.reduce((s, p) => s + p.quantity, 0)}
               </td>
