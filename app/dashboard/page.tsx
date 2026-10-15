@@ -378,7 +378,7 @@ function DashboardInner() {
         {result && (
           <div className="space-y-4">
             <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
-            <ContainerFloorPlan pallets={result.pallets} />
+            <ContainerFloorPlan pallets={result.pallets} recommendation={result.containerRecommendation} />
             <PalletPlanTable pallets={result.pallets} />
           </div>
         )}

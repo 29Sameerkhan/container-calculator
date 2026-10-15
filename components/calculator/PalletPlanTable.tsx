@@ -41,7 +41,20 @@ export default function PalletPlanTable({ pallets }: Props) {
                     {p.customerName || <span className="text-gray-400 italic">—</span>}
                   </td>
                 )}
-                <td className="py-2.5 pr-4 text-xs text-gray-600 max-w-[180px] truncate" title={p.productCode}>{p.productCode}</td>
+                <td className="py-2.5 pr-4 text-xs text-gray-600 max-w-[220px]">
+                  {p.isMixedSku ? (
+                    <div>
+                      <span className="inline-block mb-1 text-[10px] font-semibold bg-amber-100 text-amber-700 rounded px-1.5 py-0.5 uppercase tracking-wide">
+                        Mixed · {p.productCodes?.length ?? 1} SKUs
+                      </span>
+                      <div className="truncate text-gray-500" title={(p.productCodes ?? [p.productCode]).join(', ')}>
+                        {(p.productCodes ?? [p.productCode]).join(', ')}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="truncate block" title={p.productCode}>{p.productCode}</span>
+                  )}
+                </td>
                 <td className="py-2.5 pr-4">
                   <span className="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">{p.family}</span>
                 </td>

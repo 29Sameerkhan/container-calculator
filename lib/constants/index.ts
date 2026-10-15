@@ -29,6 +29,11 @@ export const WOOD_WEIGHT = {
   BOX_ACCESSORY: 10,
 };
 
+// Max gross weight per pallet (kg) — safe working load for a standard 2-tonne counterbalance forklift.
+// 1,500 kg is conservative: accounts for height-lift penalties and off-centre load factors.
+// Increase to 2,000 if your facility uses a heavier-rated forklift.
+export const MAX_PALLET_GROSS_KG = 1500;
+
 // Max stacking height inside container (mm)
 export const MAX_STACK_HEIGHT_MM = 2350;
 

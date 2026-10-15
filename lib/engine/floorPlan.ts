@@ -2,43 +2,53 @@ import { PalletPlan } from '@/lib/types';
 
 export interface PlacedPallet {
   pallet: PalletPlan;
-  x: number;       // mm from container front-left
-  y: number;       // mm from container left wall (top-down view)
+  x: number;
+  y: number;
   rotated: boolean;
 }
 
-// 40ft container internal dims (mm)
-const C_LENGTH = 11998;
-const C_WIDTH  = 2352;
-const C_HEIGHT = 2393;
+// Container internal dims (mm)
+export const CONTAINERS = {
+  LCL:      { LENGTH: 0,      WIDTH: 2352, HEIGHT: 2393 }, // no floor plan for LCL
+  FCL_20FT: { LENGTH: 5898,   WIDTH: 2352, HEIGHT: 2393 },
+  FCL_40FT: { LENGTH: 11998,  WIDTH: 2352, HEIGHT: 2393 },
+};
 
-// Strip-pack: sort by length desc, pair side-by-side if W1+W2 ≤ C_WIDTH, else solo strip
-export function packPallets(pallets: PalletPlan[]): PlacedPallet[] {
+export function packPallets(
+  pallets: PalletPlan[],
+  containerLength: number
+): PlacedPallet[] {
   const sorted = [...pallets].sort((a, b) => b.lengthMm - a.lengthMm);
   const placed: PlacedPallet[] = [];
-  let cursor = 0; // mm from front of container
+  const C_WIDTH = 2352;
+  let cursor = 0;
   let i = 0;
 
   while (i < sorted.length) {
     const a = sorted[i];
     const b = sorted[i + 1];
 
+    // Don't place past the container length
+    if (cursor + a.lengthMm > containerLength) {
+      // overflow — still place it so the UI can flag it red
+      placed.push({ pallet: a, x: cursor, y: 0, rotated: false });
+      i++;
+      continue;
+    }
+
     const canPair = b && (a.widthMm + b.widthMm) <= C_WIDTH;
 
     if (canPair) {
-      // Place a on left, b on right
-      placed.push({ pallet: a, x: cursor, y: 0, rotated: false });
-      placed.push({ pallet: b, x: cursor, y: a.widthMm, rotated: false });
+      placed.push({ pallet: a, x: cursor, y: 0,          rotated: false });
+      placed.push({ pallet: b, x: cursor, y: a.widthMm,  rotated: false });
       cursor += Math.max(a.lengthMm, b.lengthMm);
       i += 2;
     } else {
       placed.push({ pallet: a, x: cursor, y: 0, rotated: false });
       cursor += a.lengthMm;
-      i += 1;
+      i++;
     }
   }
 
   return placed;
 }
-
-export const CONTAINER = { LENGTH: C_LENGTH, WIDTH: C_WIDTH, HEIGHT: C_HEIGHT };
