@@ -7,6 +7,7 @@ import { X } from 'lucide-react';
 import OrderItemForm, { isComplete } from '@/components/calculator/OrderItemForm';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
+import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 
 // One order card on the dashboard. `items` are the rows its form starts with
@@ -377,6 +378,7 @@ function DashboardInner() {
         {result && (
           <div className="space-y-4">
             <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
+            <ContainerFloorPlan pallets={result.pallets} />
             <PalletPlanTable pallets={result.pallets} />
           </div>
         )}

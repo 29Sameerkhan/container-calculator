@@ -126,6 +126,7 @@ export function buildPalletPlans(orders: ShipmentOrder[]): PalletPlan[] {
         orderRef,
         family: item.palletFamily,
         productCode: item.productCode,
+        productCodes: [item.productCode], // one SKU per pallet until mixed palletising exists
         quantity: unitsThisPallet,
         lengthMm,
         widthMm: palletWidthMm,

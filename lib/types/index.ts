@@ -8,6 +8,8 @@ export interface OrderItem {
   boxHeightMm: number;
   netWeightKg: number;   // per box
   grossWeightKg: number; // per box
+  /** Customer name — used for pallet consolidation grouping (items from different customers are never co-palletised) */
+  customer?: string;
   // fallback: weight entered manually if ERP missing
   weightManualEntry?: boolean;
 }
@@ -26,7 +28,11 @@ export interface PalletPlan {
   orderRef: string;
   family: string;
   productCode: string;
+  /** All SKUs consolidated onto this pallet — length > 1 means mixed pallet */
+  productCodes: string[];
   quantity: number;
+  /** Per-SKU breakdown when isMixedSku=true */
+  skuBreakdown?: Array<{ productCode: string; quantity: number; netWeightKg: number; grossWeightKg: number }>;
   lengthMm: number;
   widthMm: number;
   heightMm: number;
@@ -36,6 +42,8 @@ export interface PalletPlan {
   woodWeightKg: number;
   totalGrossKg: number;
   isMixedSku: boolean;
+  /** Customer this pallet belongs to — used for colour-coding in floor plan */
+  customer?: string;
 }
 
 // Totals for one order within a shipment
@@ -53,7 +61,6 @@ export interface ShipmentResult {
   totalCBM: number;
   totalGrossKg: number;
   containerRecommendation: 'LCL' | 'FCL_20FT' | 'FCL_40FT' | 'MULTI_CONTAINER';
-  // Estimated 40ft containers needed; set only for MULTI_CONTAINER
-  containersNeeded?: number;
   warnings: string[];
+  containersNeeded?: number; // set when MULTI_CONTAINER
 }
