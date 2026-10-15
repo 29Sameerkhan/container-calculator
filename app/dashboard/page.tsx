@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
-import OrderItemForm from '@/components/calculator/OrderItemForm';
+import OrderItemForm, { isComplete } from '@/components/calculator/OrderItemForm';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import { OrderItem, ShipmentResult } from '@/lib/types';
@@ -17,11 +17,17 @@ export default function DashboardPage() {
   const [resetKey, setResetKey] = useState(0);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [savedId, setSavedId] = useState<number | null>(null);
+  // Latest form rows, written synchronously by OrderItemForm on every change
+  const rowsRef = useRef<OrderItem[]>([]);
+  // Items the current result was calculated from — what Save stores
+  const [calculatedItems, setCalculatedItems] = useState<OrderItem[]>([]);
 
   async function handleCalculate() {
     setSaveStatus('idle');
     setSavedId(null);
-    if (items.length === 0) {
+    const submitItems = rowsRef.current.filter(row => isComplete(row));
+    console.log('[calculate] items being sent:', submitItems);
+    if (submitItems.length === 0) {
       setError('Add at least one product line before calculating.');
       return;
     }
@@ -31,11 +37,12 @@ export default function DashboardPage() {
       const res = await fetch('/api/calculate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, customerName, orderRef }),
+        body: JSON.stringify({ items: submitItems, customerName, orderRef }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Calculation failed');
       setResult(data.result);
+      setCalculatedItems(submitItems);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
@@ -45,6 +52,8 @@ export default function DashboardPage() {
 
   function handleReset() {
     setItems([]);
+    rowsRef.current = [];
+    setCalculatedItems([]);
     setResult(null);
     setError(null);
     setCustomerName('');
@@ -61,7 +70,7 @@ export default function DashboardPage() {
       const res = await fetch('/api/save-calculation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName, orderRef, items, result }),
+        body: JSON.stringify({ customerName, orderRef, items: calculatedItems, result }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Save failed');
@@ -126,7 +135,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Product line entry */}
-        <OrderItemForm key={resetKey} items={items} setItems={setItems} />
+        <OrderItemForm key={resetKey} items={items} setItems={setItems} rowsRef={rowsRef} />
 
         {/* Calculate button */}
         {items.length > 0 && (

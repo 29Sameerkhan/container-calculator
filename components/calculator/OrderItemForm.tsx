@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MutableRefObject } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
 import { Trash2, Plus } from 'lucide-react';
@@ -8,6 +8,9 @@ import { Trash2, Plus } from 'lucide-react';
 interface Props {
   items: OrderItem[];
   setItems: (items: OrderItem[]) => void;
+  // Always holds the latest rows, written synchronously on every change;
+  // the dashboard reads it when Calculate is clicked
+  rowsRef: MutableRefObject<OrderItem[]>;
 }
 
 const PRODUCT_TYPES = [
@@ -64,7 +67,7 @@ function isWholeQty(row: OrderItem): boolean {
   return Number.isInteger(row.quantity);
 }
 
-function isComplete(row: OrderItem): boolean {
+export function isComplete(row: OrderItem): boolean {
   return (
     row.productCode.trim() !== '' &&
     isWholeQty(row) &&
@@ -76,13 +79,19 @@ function isComplete(row: OrderItem): boolean {
   );
 }
 
-export default function OrderItemForm({ setItems }: Props) {
+export default function OrderItemForm({ setItems, rowsRef }: Props) {
   const [rows, setRows] = useState<OrderItem[]>([emptyRow() as OrderItem]);
 
-  // Keep the parent's items in sync with every row change (complete rows only)
+  // Keep the parent's items in sync for display (button visibility, line count)
   useEffect(() => {
     setItems(rows.filter(isComplete));
   }, [rows, setItems]);
+
+  // Every row change goes through here so rowsRef is updated immediately
+  function commitRows(updated: OrderItem[]) {
+    rowsRef.current = updated;
+    setRows(updated);
+  }
 
   function updateRow(index: number, field: keyof OrderItem, value: string | number) {
     const updated = [...rows];
@@ -97,16 +106,15 @@ export default function OrderItemForm({ setItems }: Props) {
     } else {
       updated[index] = { ...updated[index], [field]: value };
     }
-    setRows(updated);
+    commitRows(updated);
   }
 
   function addRow() {
-    setRows([...rows, emptyRow() as OrderItem]);
+    commitRows([...rows, emptyRow() as OrderItem]);
   }
 
   function removeRow(index: number) {
-    const updated = rows.filter((_, i) => i !== index);
-    setRows(updated);
+    commitRows(rows.filter((_, i) => i !== index));
   }
 
   const completedCount = rows.filter(isComplete).length;
