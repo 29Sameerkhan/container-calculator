@@ -11,7 +11,7 @@ const OrderItemSchema = z.object({
   boxLengthMm: z.number().positive(),
   boxWidthMm: z.number().positive(),
   boxHeightMm: z.number().positive(),
-  netWeightKg: z.number().positive(),
+  netWeightKg: z.number().min(0),
   grossWeightKg: z.number().positive(),
   weightManualEntry: z.boolean().optional(),
 });
