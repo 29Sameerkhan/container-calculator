@@ -34,3 +34,24 @@ export async function GET(
     return NextResponse.json({ error: 'Fetch failed', message }, { status: 500 });
   }
 }
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  // Strict check (not parseInt): "6abc" must be rejected, not treated as 6
+  const id = Number(params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
+  }
+
+  try {
+    const deleted = await db.delete(calculations).where(eq(calculations.id, id)).returning({ id: calculations.id });
+    if (deleted.length === 0) {
+      return NextResponse.json({ error: 'Calculation not found' }, { status: 404 });
+    }
+    return NextResponse.json({ success: true });
+  } catch {
+    return NextResponse.json({ error: 'Server error' }, { status: 500 });
+  }
+}

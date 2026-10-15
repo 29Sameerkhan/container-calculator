@@ -3,6 +3,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { formatSavedAt } from '@/lib/format';
 
 interface CalculationRow {
   id: number;
@@ -31,21 +32,48 @@ const CONTAINER_LABEL: Record<string, string> = {
 
 const EDIT_BUTTON: CSSProperties = { color: '#1E4D8C', background: '#eff6ff', borderColor: '#bfdbfe' };
 const COPY_BUTTON: CSSProperties = { color: '#065f46', background: '#ecfdf5', borderColor: '#a7f3d0' };
-
-function formatDate(iso: string) {
-  const d = new Date(iso.replace(' ', 'T') + 'Z'); // Turso stores UTC without Z
-  return d.toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', hour12: true,
-    timeZone: 'Asia/Kolkata',
-  });
-}
+const DELETE_BUTTON: CSSProperties = { color: '#dc2626', background: '#fef2f2', borderColor: '#fecaca' };
 
 export default function HistoryPage() {
   const router = useRouter();
   const [rows, setRows] = useState<CalculationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Row awaiting delete confirmation; the modal is open while this is set
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  function closeDeleteModal() {
+    if (deleting) return;
+    setDeleteId(null);
+    setDeleteError(null);
+  }
+
+  // Escape closes the confirmation
+  useEffect(() => {
+    if (deleteId === null) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !deleting) { setDeleteId(null); setDeleteError(null); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [deleteId, deleting]);
+
+  async function handleDelete() {
+    if (deleteId === null) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/calculations/${deleteId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Delete failed');
+      setRows(prev => prev.filter(r => r.id !== deleteId));
+      setDeleteId(null);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   useEffect(() => {
     fetch('/api/calculations')
@@ -140,7 +168,11 @@ export default function HistoryPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {rows.map(row => (
-                    <tr key={row.id} className="hover:bg-blue-50/40 transition-colors">
+                    <tr
+                      key={row.id}
+                      onClick={() => router.push('/history/' + row.id)}
+                      className="cursor-pointer hover:bg-blue-50/40 transition-colors"
+                    >
                       <td className="px-4 py-3 font-mono font-bold text-xs" style={{ color: '#1E4D8C' }}>#{row.id}</td>
                       <td className="px-4 py-3 font-medium text-gray-800">
                         {row.customerName || <span className="text-gray-400 italic">—</span>}
@@ -159,22 +191,29 @@ export default function HistoryPage() {
                       <td className="px-4 py-3 text-right font-mono text-xs">{row.totalCbm}</td>
                       <td className="px-4 py-3 text-right text-xs">{row.totalGrossKg.toLocaleString()}</td>
                       <td className="px-4 py-3 text-right text-xs">{row.palletCount}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{formatDate(row.createdAt)}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{formatSavedAt(row.createdAt)}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-2">
                           <button
-                            onClick={() => router.push(`/dashboard?edit=${row.id}`)}
+                            onClick={e => { e.stopPropagation(); router.push(`/dashboard?edit=${row.id}`); }}
                             className="text-xs font-medium rounded-lg border px-2.5 py-1 whitespace-nowrap hover:opacity-80 transition-opacity"
                             style={EDIT_BUTTON}
                           >
                             ✏️ Edit
                           </button>
                           <button
-                            onClick={() => router.push(`/dashboard?duplicate=${row.id}`)}
+                            onClick={e => { e.stopPropagation(); router.push(`/dashboard?duplicate=${row.id}`); }}
                             className="text-xs font-medium rounded-lg border px-2.5 py-1 whitespace-nowrap hover:opacity-80 transition-opacity"
                             style={COPY_BUTTON}
                           >
                             📋 Copy
+                          </button>
+                          <button
+                            onClick={e => { e.stopPropagation(); setDeleteError(null); setDeleteId(row.id); }}
+                            className="text-xs font-medium rounded-lg border px-2.5 py-1 whitespace-nowrap hover:opacity-80 transition-opacity"
+                            style={DELETE_BUTTON}
+                          >
+                            🗑 Delete
                           </button>
                         </div>
                       </td>
@@ -186,6 +225,46 @@ export default function HistoryPage() {
           </div>
         )}
       </div>
+
+      {/* Delete confirmation */}
+      {deleteId !== null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 px-4"
+          onClick={closeDeleteModal}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-title"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-blue-100 p-6"
+            onClick={e => e.stopPropagation()}
+          >
+            <h2 id="delete-title" className="text-base font-semibold text-gray-900">
+              Delete calculation #{deleteId}?
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">This cannot be undone.</p>
+            {deleteError && (
+              <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{deleteError}</p>
+            )}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                onClick={closeDeleteModal}
+                disabled={deleting}
+                className="text-sm font-medium rounded-lg border border-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="text-sm font-medium rounded-lg px-4 py-2 text-white bg-red-600 hover:bg-red-700 disabled:opacity-60 transition-colors"
+              >
+                {deleting ? 'Deleting…' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer className="py-6 text-center text-xs text-gray-400">
         SLEKA Industries Pvt. Ltd. · Container Load Planning System
