@@ -8,7 +8,7 @@ interface Props {
 
 export default function PalletPlanTable({ pallets }: Props) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
+    <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
       <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
         Pallet Plan — {pallets.length} pallet{pallets.length > 1 ? 's' : ''}
       </h2>

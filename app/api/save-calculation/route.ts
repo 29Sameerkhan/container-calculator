@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { calculations } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 const SaveSchema = z.object({
@@ -40,5 +41,40 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: 'Save failed', message }, { status: 500 });
+  }
+}
+
+const UpdateSchema = SaveSchema.extend({
+  id: z.number().int().positive(),
+});
+
+export async function PUT(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const parsed = UpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
+    }
+    const { id, customerName, orderRef, items, result } = parsed.data;
+
+    const [updated] = await db.update(calculations).set({
+      customerName,
+      orderRef,
+      totalCbm: result.totalCBM,
+      totalGrossKg: result.totalGrossKg,
+      containerRecommendation: result.containerRecommendation,
+      palletCount: result.pallets.length,
+      itemsJson: JSON.stringify(items),
+      resultJson: JSON.stringify(result),
+    }).where(eq(calculations.id, id)).returning();
+
+    if (!updated) {
+      return NextResponse.json({ error: 'Calculation not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, id: updated.id });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return NextResponse.json({ error: 'Update failed', message }, { status: 500 });
   }
 }

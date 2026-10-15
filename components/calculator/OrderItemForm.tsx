@@ -11,6 +11,8 @@ interface Props {
   // Always holds the latest rows, written synchronously on every change;
   // the dashboard reads it when Calculate is clicked
   rowsRef: MutableRefObject<OrderItem[]>;
+  // Rows to start with (e.g. a saved calculation being edited); read on mount only
+  initialRows?: OrderItem[];
 }
 
 const PRODUCT_TYPES = [
@@ -79,8 +81,12 @@ export function isComplete(row: OrderItem): boolean {
   );
 }
 
-export default function OrderItemForm({ setItems, rowsRef }: Props) {
-  const [rows, setRows] = useState<OrderItem[]>([emptyRow() as OrderItem]);
+export default function OrderItemForm({ setItems, rowsRef, initialRows }: Props) {
+  const [rows, setRows] = useState<OrderItem[]>(() => {
+    const start = initialRows?.length ? initialRows : [emptyRow() as OrderItem];
+    rowsRef.current = start;
+    return start;
+  });
 
   // Keep the parent's items in sync for display (button visibility, line count)
   useEffect(() => {
@@ -120,7 +126,7 @@ export default function OrderItemForm({ setItems, rowsRef }: Props) {
   const completedCount = rows.filter(isComplete).length;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
+    <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Product Lines</h2>
