@@ -12,8 +12,8 @@ const testItems: OrderItem[] = [
     boxLengthMm: 900,
     boxWidthMm: 300,
     boxHeightMm: 400,
-    netWeightKg: 985,
-    grossWeightKg: 1000,
+    netWeightKg: 49.25,
+    grossWeightKg: 50,
   },
   {
     productCode: 'SM-C-I-10-V6',
@@ -23,8 +23,8 @@ const testItems: OrderItem[] = [
     boxLengthMm: 450,
     boxWidthMm: 340,
     boxHeightMm: 500,
-    netWeightKg: 1100,
-    grossWeightKg: 1125,
+    netWeightKg: 55,
+    grossWeightKg: 56.25,
   },
 ];
 

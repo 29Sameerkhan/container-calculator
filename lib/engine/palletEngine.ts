@@ -103,8 +103,9 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
       }
 
       const cbm = (lengthMm * palletWidthMm * heightMm) / 1_000_000_000;
-      const netWeightKg = (item.netWeightKg / item.quantity) * unitsThisPallet;
-      const grossWeightKg = (item.grossWeightKg / item.quantity) * unitsThisPallet;
+      // Item weights are per box
+      const netWeightKg = item.netWeightKg * unitsThisPallet;
+      const grossWeightKg = item.grossWeightKg * unitsThisPallet;
       const isMixedSku = false; // single-item call; mixed handled separately
       const woodWeightKg = resolveWoodWeight(item, isMixedSku);
       const totalGrossKg = grossWeightKg + woodWeightKg;

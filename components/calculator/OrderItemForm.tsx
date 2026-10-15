@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
 import { Trash2, Plus } from 'lucide-react';
@@ -33,8 +33,8 @@ const NUMBER_FIELDS: { field: 'quantity' | 'boxLengthMm' | 'boxWidthMm' | 'boxHe
   { field: 'boxWidthMm', label: 'W (mm)' },
   { field: 'boxHeightMm', label: 'H (mm)' },
   // Net weight is optional, so it is hidden on small screens
-  { field: 'netWeightKg', label: 'Net (kg)', className: 'hidden md:block' },
-  { field: 'grossWeightKg', label: 'Gross (kg)' },
+  { field: 'netWeightKg', label: 'Net kg/box', className: 'hidden md:block' },
+  { field: 'grossWeightKg', label: 'Gross kg/box' },
 ];
 
 // Shared column layout for the heading row and each product row:
@@ -58,8 +58,31 @@ const emptyRow = (): Omit<OrderItem, 'palletFamily'> & { palletFamily: string } 
   grossWeightKg: 0,
 });
 
+// Quantity is a whole number of boxes. A decimal is kept as typed (not silently
+// rounded) and the row stays incomplete, so it never reaches the API.
+function isWholeQty(row: OrderItem): boolean {
+  return Number.isInteger(row.quantity);
+}
+
+function isComplete(row: OrderItem): boolean {
+  return (
+    row.productCode.trim() !== '' &&
+    isWholeQty(row) &&
+    row.quantity > 0 &&
+    row.boxLengthMm > 0 &&
+    row.boxWidthMm > 0 &&
+    row.boxHeightMm > 0 &&
+    row.grossWeightKg > 0
+  );
+}
+
 export default function OrderItemForm({ setItems }: Props) {
   const [rows, setRows] = useState<OrderItem[]>([emptyRow() as OrderItem]);
+
+  // Keep the parent's items in sync with every row change (complete rows only)
+  useEffect(() => {
+    setItems(rows.filter(isComplete));
+  }, [rows, setItems]);
 
   function updateRow(index: number, field: keyof OrderItem, value: string | number) {
     const updated = [...rows];
@@ -84,22 +107,6 @@ export default function OrderItemForm({ setItems }: Props) {
   function removeRow(index: number) {
     const updated = rows.filter((_, i) => i !== index);
     setRows(updated);
-    setItems(updated.filter(isComplete));
-  }
-
-  function isComplete(row: OrderItem): boolean {
-    return (
-      row.productCode.trim() !== '' &&
-      row.quantity > 0 &&
-      row.boxLengthMm > 0 &&
-      row.boxWidthMm > 0 &&
-      row.boxHeightMm > 0 &&
-      row.grossWeightKg > 0
-    );
-  }
-
-  function handleBlur() {
-    setItems(rows.filter(isComplete));
   }
 
   const completedCount = rows.filter(isComplete).length;
@@ -144,7 +151,6 @@ export default function OrderItemForm({ setItems }: Props) {
                 type="text"
                 value={row.productCode}
                 onChange={e => updateRow(i, 'productCode', e.target.value)}
-                onBlur={handleBlur}
                 placeholder="SK77-50-NK80X65…"
                 className={INPUT}
               />
@@ -153,7 +159,7 @@ export default function OrderItemForm({ setItems }: Props) {
               <label className={FIELD_LABEL}>Type</label>
               <select
                 value={row.productType}
-                onChange={e => { updateRow(i, 'productType', e.target.value); handleBlur(); }}
+                onChange={e => updateRow(i, 'productType', e.target.value)}
                 className={INPUT}
               >
                 {PRODUCT_TYPES.map(t => (
@@ -165,7 +171,7 @@ export default function OrderItemForm({ setItems }: Props) {
               <label className={FIELD_LABEL}>Family</label>
               <select
                 value={row.palletFamily}
-                onChange={e => { updateRow(i, 'palletFamily', e.target.value); handleBlur(); }}
+                onChange={e => updateRow(i, 'palletFamily', e.target.value)}
                 className={INPUT}
               >
                 {getFamilyOptions(row.productType).map(f => (
@@ -180,10 +186,11 @@ export default function OrderItemForm({ setItems }: Props) {
                   type="number"
                   value={row[field] === 0 ? '' : row[field]}
                   onChange={e => updateRow(i, field, parseFloat(e.target.value) || 0)}
-                  onBlur={handleBlur}
                   min={0}
+                  step={field === 'quantity' ? 1 : 'any'}
                   placeholder="0"
-                  className={INPUT}
+                  title={field === 'quantity' && !isWholeQty(row) ? 'Quantity must be a whole number' : undefined}
+                  className={`${INPUT} ${field === 'quantity' && !isWholeQty(row) ? 'border-red-400 ring-1 ring-red-300' : ''}`}
                 />
               </div>
             ))}

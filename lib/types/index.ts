@@ -6,8 +6,8 @@ export interface OrderItem {
   boxLengthMm: number;
   boxWidthMm: number;
   boxHeightMm: number;
-  netWeightKg: number;
-  grossWeightKg: number;
+  netWeightKg: number;   // per box
+  grossWeightKg: number; // per box
   // fallback: weight entered manually if ERP missing
   weightManualEntry?: boolean;
 }
