@@ -1,7 +1,7 @@
 'use client';
 
 import { PalletPlan, ShipmentResult } from '@/lib/types';
-import { packPallets, CONTAINERS } from '@/lib/engine/floorPlan';
+import { packPallets, footprintLength, CONTAINERS, PlacedPallet } from '@/lib/engine/floorPlan';
 import { useState } from 'react';
 
 interface Props {
@@ -18,6 +18,11 @@ const COLORS = [
 ];
 
 function px(mm: number) { return Math.round(mm * SCALE); }
+
+// Height of a footprint from the floor: both pallets when stacked
+function stackHeight(p: PlacedPallet) {
+  return p.pallet.heightMm + (p.stackedPallet?.heightMm ?? 0);
+}
 
 export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -51,6 +56,9 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
   }
 
   const selectedPallet = selected ? pallets.find(p => p.palletId === selected) : null;
+  const selectedPartner = selectedPallet?.stackedWith
+    ? pallets.find(p => p.palletId === selectedPallet.stackedWith)
+    : undefined;
   const totalCBM = pallets.reduce((s, p) => s + p.cbm, 0);
   const maxCBM = container.LENGTH * C_WIDTH_MM * container.HEIGHT / 1e9;
   const utilPct = Math.min(100, (totalCBM / maxCBM) * 100);
@@ -111,14 +119,16 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
             width={cL + 2} height={cW + 2}
             style={{ display: 'block', border: '2px solid #1e40af', borderRadius: 4, background: '#f8faff' }}
           >
-            {placed.map(({ pallet, x, y, overflow }) => {
+            {placed.map(p => {
+              const { pallet, stackedPallet, x, y, overflow } = p;
               // Clamp overflow pallets to show just a sliver at the container edge with red stripe
               const drawX = px(Math.min(x, container.LENGTH - 10));
-              const drawW = overflow ? Math.max(4, px(container.LENGTH) - drawX) : px(pallet.lengthMm);
+              const drawW = overflow ? Math.max(4, px(container.LENGTH) - drawX) : px(footprintLength(p));
               const drawY = px(y);
               const drawH = px(pallet.widthMm);
               const color = overflow ? '#ef4444' : (familyColors[pallet.family] ?? '#94a3b8');
-              const isSel = selected === pallet.palletId;
+              const isSel = selected === pallet.palletId || (!!stackedPallet && selected === stackedPallet.palletId);
+              const label = stackedPallet ? `${pallet.palletId} + ${stackedPallet.palletId}` : pallet.palletId;
 
               return (
                 <g key={pallet.palletId} onClick={() => setSelected(isSel ? null : pallet.palletId)} style={{ cursor: 'pointer' }}>
@@ -130,6 +140,14 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
                     strokeWidth={isSel ? 2.5 : 1}
                     rx={2}
                   />
+                  {/* Stacked: inner border marks two pallets on this footprint */}
+                  {stackedPallet && !overflow && drawW > 10 && drawH > 10 && (
+                    <rect
+                      x={drawX + 4} y={drawY + 4} width={drawW - 8} height={drawH - 8}
+                      fill="none" stroke="white" strokeWidth={1.5} strokeOpacity={0.9} rx={1}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
                   {!overflow && drawW > 24 && drawH > 12 && (
                     <text
                       x={drawX + drawW / 2} y={drawY + drawH / 2}
@@ -138,7 +156,17 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
                       fill="white" fontWeight="600"
                       style={{ pointerEvents: 'none', userSelect: 'none' }}
                     >
-                      {pallet.palletId}
+                      {label}
+                    </text>
+                  )}
+                  {stackedPallet && !overflow && drawW > 40 && drawH > 16 && (
+                    <text
+                      x={drawX + drawW - 8} y={drawY + 10}
+                      textAnchor="end" dominantBaseline="middle"
+                      fontSize={8} fill="white" fontWeight="700"
+                      style={{ pointerEvents: 'none', userSelect: 'none' }}
+                    >
+                      ⬆2
                     </text>
                   )}
                 </g>
@@ -149,44 +177,54 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
           </svg>
         ) : (
           // SIDE VIEW — every pallet solid at its x position (along the length) and height.
-          // Tallest drawn first so shorter side-by-side pallets stay visible in front.
+          // A stacked pair is drawn as two rectangles: bottom from the floor, top on it.
+          // Tallest footprint drawn first so shorter side-by-side ones stay visible in front.
           <svg
             width={cL + 2} height={cH + 2}
             style={{ display: 'block', border: '2px solid #1e40af', borderRadius: 4, background: '#f8faff' }}
           >
-            {[...placed].sort((a, b) => b.pallet.heightMm - a.pallet.heightMm).map(({ pallet, x, overflow }) => {
-              const drawX = px(Math.min(x, container.LENGTH - 10));
-              const drawW = overflow ? Math.max(4, cL - drawX) : px(pallet.lengthMm);
-              const drawH = px(pallet.heightMm);
-              const svgY = cH - drawH; // floor at bottom
-              const color = overflow ? '#ef4444' : (familyColors[pallet.family] ?? '#94a3b8');
-              const isSel = selected === pallet.palletId;
+            {[...placed]
+              .sort((a, b) => stackHeight(b) - stackHeight(a))
+              .flatMap(({ pallet, stackedPallet, x, overflow }) => {
+                // Bottom pallet sits on the floor; the top one sits on the bottom one
+                const layers = [{ p: pallet, baseMm: 0, isTop: false }];
+                if (stackedPallet) layers.push({ p: stackedPallet, baseMm: pallet.heightMm, isTop: true });
 
-              return (
-                <g key={pallet.palletId} onClick={() => setSelected(isSel ? null : pallet.palletId)} style={{ cursor: 'pointer' }}>
-                  <rect
-                    x={drawX + 1} y={svgY + 1} width={drawW - 2} height={drawH - 2}
-                    fill={color}
-                    fillOpacity={isSel ? 0.9 : 0.6}
-                    stroke={isSel ? '#1e40af' : color}
-                    strokeWidth={isSel ? 2.5 : 1}
-                    rx={2}
-                  />
-                  {!overflow && drawW > 24 && drawH > 14 && (
-                    // Label near the top edge so it stays visible above shorter pallets in front
-                    <text
-                      x={drawX + drawW / 2} y={svgY + 12}
-                      textAnchor="middle" dominantBaseline="middle"
-                      fontSize={Math.min(10, drawH / 2.2)}
-                      fill="white" fontWeight="600"
-                      style={{ pointerEvents: 'none', userSelect: 'none' }}
-                    >
-                      {pallet.palletId}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
+                return layers.map(({ p, baseMm, isTop }) => {
+                  const drawX = px(Math.min(x, container.LENGTH - 10));
+                  const drawW = overflow ? Math.max(4, cL - drawX) : px(p.lengthMm);
+                  const drawH = px(p.heightMm);
+                  const svgY = cH - px(baseMm) - drawH; // floor at bottom
+                  const color = overflow ? '#ef4444' : (familyColors[p.family] ?? '#94a3b8');
+                  const isSel = selected === p.palletId;
+
+                  return (
+                    <g key={p.palletId} onClick={() => setSelected(isSel ? null : p.palletId)} style={{ cursor: 'pointer' }}>
+                      <rect
+                        x={drawX + 1} y={svgY + 1} width={drawW - 2} height={drawH - 2}
+                        fill={color}
+                        // Top pallet of a stack: lighter shade of the same colour
+                        fillOpacity={isSel ? 0.9 : isTop ? 0.35 : 0.6}
+                        stroke={isSel ? '#1e40af' : color}
+                        strokeWidth={isSel ? 2.5 : 1}
+                        rx={2}
+                      />
+                      {!overflow && drawW > 24 && drawH > 14 && (
+                        // Label near the top edge so it stays visible above shorter pallets in front
+                        <text
+                          x={drawX + drawW / 2} y={svgY + 12}
+                          textAnchor="middle" dominantBaseline="middle"
+                          fontSize={Math.min(10, drawH / 2.2)}
+                          fill="white" fontWeight="600"
+                          style={{ pointerEvents: 'none', userSelect: 'none' }}
+                        >
+                          {p.palletId}
+                        </text>
+                      )}
+                    </g>
+                  );
+                });
+              })}
           </svg>
         )}
       </div>
@@ -206,6 +244,13 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
             <span>{selectedPallet.cbm} CBM</span>
             <span>{selectedPallet.totalGrossKg} kg gross</span>
           </div>
+          {selectedPallet.isStacked && selectedPartner && (
+            <div className="text-blue-700">
+              ⧉ Stacked {selectedPallet.stackPosition === 'top' ? 'on top of' : 'under'} {selectedPartner.palletId}
+              {' · '}combined H {selectedPallet.heightMm + selectedPartner.heightMm} mm
+              {' · '}{selectedPallet.totalGrossKg + selectedPartner.totalGrossKg} kg gross
+            </div>
+          )}
           {selectedPallet.isMixedSku && selectedPallet.skuBreakdown && (
             <div className="text-blue-600">
               {selectedPallet.skuBreakdown.map(s => `${s.productCode} ×${s.quantity}`).join(' · ')}

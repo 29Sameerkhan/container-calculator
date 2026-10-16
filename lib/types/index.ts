@@ -44,6 +44,12 @@ export interface PalletPlan {
   isMixedSku: boolean;
   /** Customer this pallet belongs to — used for colour-coding in floor plan */
   customer?: string;
+  /** True when this pallet is stacked two-high with another (see stackPallets) */
+  isStacked?: boolean;
+  /** palletId of the other pallet in the stack */
+  stackedWith?: string;
+  /** Position in the stack: the heavier pallet is always the bottom one */
+  stackPosition?: 'bottom' | 'top';
 }
 
 // Totals for one order within a shipment

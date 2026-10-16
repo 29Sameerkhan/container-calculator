@@ -14,7 +14,10 @@ import {
   WOOD_WEIGHT,
   MAX_STACK_HEIGHT_MM,
   PALLET_BASE_HEIGHT_MM,
+  MAX_PALLET_GROSS_KG,
+  MAX_STACKED_HEIGHT_MM,
 } from '@/lib/constants';
+import { packPallets } from '@/lib/engine/floorPlan';
 
 // ─── STEP 1: Resolve pallet width for an item ────────────────────────────────
 export function resolvePalletWidth(item: OrderItem): number {
@@ -146,6 +149,60 @@ export function buildPalletPlans(orders: ShipmentOrder[]): PalletPlan[] {
   return pallets;
 }
 
+// ─── STEP 4b: Floor fit + conditional stacking ───────────────────────────────
+// Floor fit uses the same row-fill packing as the floor plan drawing, so the
+// recommendation and the drawing always agree. Stacked pairs take one footprint.
+export function fitsFloor(pallets: PalletPlan[], containerLength: number): boolean {
+  return packPallets(pallets, containerLength).every(p => !p.overflow);
+}
+
+// A pair may be stacked only if ALL rules hold
+function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
+  return (
+    top.widthMm === bottom.widthMm &&                                // same footprint width
+    bottom.heightMm + top.heightMm <= MAX_STACKED_HEIGHT_MM &&       // headroom
+    bottom.totalGrossKg + top.totalGrossKg <= MAX_PALLET_GROSS_KG && // forklift cap
+    bottom.totalGrossKg >= top.totalGrossKg &&                       // heavier on bottom
+    top.lengthMm <= bottom.lengthMm &&                               // no overhang
+    top.customerName === bottom.customerName &&                      // keep consignees apart
+    top.orderRef === bottom.orderRef
+  );
+}
+
+// Stack pallets two-high ONLY as far as needed to fit a floor of targetLength.
+// Greedy, fewest pairs: each round stacks the valid pair that removes the most
+// floor length (the top pallet's footprint), then re-checks the fit and stops
+// as soon as everything fits. Never more than 2 per stack.
+// Returns every physical pallet (same order) with stack fields set on the
+// pairs used. If no stacking can make it fit, the caller should discard it.
+export function stackPallets(pallets: PalletPlan[], targetLength: number): PalletPlan[] {
+  let current = pallets;
+
+  while (!fitsFloor(current, targetLength)) {
+    const free = current.filter(p => !p.isStacked);
+    let best: { bottom: PalletPlan; top: PalletPlan } | null = null;
+
+    for (let i = 0; i < free.length; i++) {
+      for (let j = i + 1; j < free.length; j++) {
+        for (const [bottom, top] of [[free[i], free[j]], [free[j], free[i]]]) {
+          if (!canStack(bottom, top)) continue;
+          if (!best || top.lengthMm > best.top.lengthMm) best = { bottom, top };
+        }
+      }
+    }
+    if (!best) break; // no valid pair left
+
+    const { bottom, top } = best;
+    current = current.map(p =>
+      p === bottom ? { ...p, isStacked: true, stackedWith: top.palletId, stackPosition: 'bottom' as const }
+      : p === top ? { ...p, isStacked: true, stackedWith: bottom.palletId, stackPosition: 'top' as const }
+      : p
+    );
+  }
+
+  return current;
+}
+
 // ─── Per-order totals, in the order the orders were given ────────────────────
 // Orders are matched by customerName + orderRef, so two orders from the same
 // customer get separate rows; orders with identical name and ref are merged.
@@ -174,27 +231,15 @@ function summariseByOrder(orders: ShipmentOrder[], pallets: PalletPlan[]): Custo
 
 // ─── STEP 5: Aggregate + recommend container ─────────────────────────────────
 export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
-  const pallets = buildPalletPlans(orders);
+  // Pallets start unstacked; stacking is applied below only if it is the
+  // difference between fitting a container floor or not
+  const built = buildPalletPlans(orders);
+  let pallets = built;
   const warnings: string[] = [];
 
-  const totalCBM = pallets.reduce((sum, p) => sum + p.cbm, 0);
-  const totalGrossKg = pallets.reduce((sum, p) => sum + p.totalGrossKg, 0);
-
-  // Any pallet longer than a 20ft container's internal length rules out 20ft
-  // Check 1: any single pallet too long for 20ft
-  const anyPalletTooLong = pallets.some((p) => p.lengthMm > CONTAINER_LENGTH_MM.FCL_20FT);
-  // Check 2: simulate strip-packing into 20ft — do all pallets fit by floor length?
-  const sorted20ft = [...pallets].sort((a, b) => b.lengthMm - a.lengthMm);
-  let used20ft = 0;
-  let idx = 0;
-  while (idx < sorted20ft.length) {
-    const a = sorted20ft[idx];
-    const b = sorted20ft[idx + 1];
-    const pair = b && (a.widthMm + b.widthMm) <= 2352;
-    used20ft += pair ? Math.max(a.lengthMm, b.lengthMm) : a.lengthMm;
-    idx += pair ? 2 : 1;
-  }
-  const requires40ft = anyPalletTooLong || used20ft > CONTAINER_LENGTH_MM.FCL_20FT;
+  // Stacking never changes these totals
+  const totalCBM = built.reduce((sum, p) => sum + p.cbm, 0);
+  const totalGrossKg = built.reduce((sum, p) => sum + p.totalGrossKg, 0);
 
   // Validate each pallet
   pallets.forEach((p) => {
@@ -211,41 +256,58 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
     }
   });
 
-  // Container recommendation — LCL band first, then FCL bands by CBM.
-  // FCL picks still respect payload limits and pallet length (requires40ft).
+  // Container recommendation.
+  // Each FCL size must pass its CBM/payload band AND fit its floor. Floor fit is
+  // tried unstacked first; stacking is only attempted when that fails.
   let containerRecommendation: ShipmentResult['containerRecommendation'];
   let containersNeeded: number | undefined;
+
+  const len20 = CONTAINER_LENGTH_MM.FCL_20FT;
+  const len40 = CONTAINER_LENGTH_MM.FCL_40FT;
+  const in20ftBand = totalCBM <= FCL_20FT_BAND_MAX_CBM && totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg;
+  const in40ftBand = totalCBM <= CONTAINERS.FCL_40FT.maxCBM && totalGrossKg <= CONTAINERS.FCL_40FT.maxPayloadKg;
+
+  // Returns stacked pallets if stacking rescues the fit, otherwise null
+  const rescueByStacking = (length: number): PalletPlan[] | null => {
+    const stacked = stackPallets(built, length);
+    return fitsFloor(stacked, length) ? stacked : null;
+  };
+  const stackedNote = (stacked: PalletPlan[], size: string) => {
+    const pairs = stacked.filter(p => p.stackPosition === 'bottom').length;
+    warnings.push(
+      `${pairs} stacked pair${pairs > 1 ? 's' : ''} needed to fit a ${size} — pallets stacked two-high, confirm with Mahendra before loading`
+    );
+  };
+
   // SLEKA books one full container per customer, so LCL only for a single
   // small pallet; 2+ pallets always get FCL regardless of volume
-  if (pallets.length <= 1 && totalCBM < 2.0) {
+  if (built.length <= 1 && totalCBM < 2.0) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for a full container. Consolidation charges will apply.');
-  } else if (
-    totalCBM <= FCL_20FT_BAND_MAX_CBM &&
-    totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg &&
-    !requires40ft
-  ) {
+  } else if (in20ftBand && fitsFloor(built, len20)) {
     containerRecommendation = 'FCL_20FT';
-  } else if (
-    totalCBM <= CONTAINERS.FCL_40FT.maxCBM &&
-    totalGrossKg <= CONTAINERS.FCL_40FT.maxPayloadKg
-  ) {
+  } else if (in20ftBand && rescueByStacking(len20)) {
+    pallets = rescueByStacking(len20)!;
+    containerRecommendation = 'FCL_20FT';
+    stackedNote(pallets, '20ft');
+  } else if (in40ftBand && fitsFloor(built, len40)) {
     containerRecommendation = 'FCL_40FT';
+  } else if (in40ftBand && rescueByStacking(len40)) {
+    pallets = rescueByStacking(len40)!;
+    containerRecommendation = 'FCL_40FT';
+    stackedNote(pallets, '40ft');
   } else {
     containerRecommendation = 'MULTI_CONTAINER';
     const containersByVolume = Math.ceil(totalCBM / CONTAINERS.FCL_40FT.maxCBM);
     const containersByWeight = Math.ceil(totalGrossKg / CONTAINERS.FCL_40FT.maxPayloadKg);
-    containersNeeded = Math.max(containersByVolume, containersByWeight);
-    const limitingFactor = containersByVolume >= containersByWeight ? 'volume' : 'weight';
+    // Within the 40ft band but the pallets don't fit one 40ft floor even
+    // stacked: floor space is the limit, so at least 2 containers
+    const floorLimited = in40ftBand;
+    containersNeeded = Math.max(containersByVolume, containersByWeight, floorLimited ? 2 : 1);
+    const limitingFactor = floorLimited ? 'floor space' : containersByVolume >= containersByWeight ? 'volume' : 'weight';
     warnings.push(
       `Requires approximately ${containersNeeded} × 40ft FCL containers — limited by ${limitingFactor}. Coordinate with freight forwarder for split shipment.`
     );
-  }
-
-  // Guard: a pallet longer than 20ft can never ship in a 20ft
-  if (requires40ft && containerRecommendation === 'FCL_20FT') {
-    containerRecommendation = 'FCL_40FT';
-    warnings.push('One or more pallets exceed 5,898mm — 20ft container not possible');
   }
 
   // Weight warnings

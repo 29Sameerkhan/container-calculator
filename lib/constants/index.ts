@@ -34,6 +34,10 @@ export const WOOD_WEIGHT = {
 // Increase to 2,000 if your facility uses a heavier-rated forklift.
 export const MAX_PALLET_GROSS_KG = 1500;
 
+// Max combined height (mm) of two pallets stacked in the warehouse before loading —
+// leaves headroom under the container roof for the forklift
+export const MAX_STACKED_HEIGHT_MM = 2200;
+
 // Max stacking height inside container (mm)
 export const MAX_STACK_HEIGHT_MM = 2350;
 
