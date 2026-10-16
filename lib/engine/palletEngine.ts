@@ -8,7 +8,6 @@ import {
 import {
   CONTAINERS,
   CONTAINER_LENGTH_MM,
-  LCL_MAX_CBM,
   FCL_20FT_BAND_MAX_CBM,
   PUMP_PALLET_WIDTH,
   MOTOR_PALLET_WIDTH,
@@ -216,7 +215,9 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
   // FCL picks still respect payload limits and pallet length (requires40ft).
   let containerRecommendation: ShipmentResult['containerRecommendation'];
   let containersNeeded: number | undefined;
-  if (totalCBM <= LCL_MAX_CBM) {
+  // SLEKA books one full container per customer, so LCL only for a single
+  // small pallet; 2+ pallets always get FCL regardless of volume
+  if (pallets.length <= 1 && totalCBM < 2.0) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for a full container. Consolidation charges will apply.');
   } else if (
