@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
 import { Trash2, Plus } from 'lucide-react';
@@ -107,8 +107,37 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     commitRows(updated);
   }
 
+  // Focus a row's Product Code field. A just-added row isn't in the DOM yet, so
+  // addRow records the index and the effect below focuses it after render.
+  const listRef = useRef<HTMLDivElement>(null);
+  const pendingFocusRow = useRef<number | null>(null);
+
+  function focusProductCode(index: number) {
+    listRef.current
+      ?.querySelector<HTMLInputElement>(`input[data-row="${index}"][data-field="productCode"]`)
+      ?.focus();
+  }
+
+  useEffect(() => {
+    if (pendingFocusRow.current === null) return;
+    listRef.current
+      ?.querySelector<HTMLInputElement>(`input[data-row="${pendingFocusRow.current}"][data-field="productCode"]`)
+      ?.focus();
+    pendingFocusRow.current = null;
+  }, [rows.length]);
+
   function addRow() {
+    pendingFocusRow.current = rows.length;
     commitRows([...rows, emptyRow() as OrderItem]);
+  }
+
+  // Enter moves on without reaching for the mouse: on the last line it adds a
+  // new line, on any other line it jumps to the next line's Product Code
+  function handleEnter(e: KeyboardEvent<HTMLInputElement>, index: number) {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    if (index === rows.length - 1) addRow();
+    else focusProductCode(index + 1);
   }
 
   function removeRow(index: number) {
@@ -145,7 +174,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
         <span />
       </div>
 
-      <div className="space-y-3 lg:space-y-0 lg:divide-y lg:divide-gray-50">
+      <div ref={listRef} className="space-y-3 lg:space-y-0 lg:divide-y lg:divide-gray-50">
         {rows.map((row, i) => (
           <div
             key={i}
@@ -157,6 +186,9 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                 type="text"
                 value={row.productCode}
                 onChange={e => updateRow(i, 'productCode', e.target.value)}
+                onKeyDown={e => handleEnter(e, i)}
+                data-row={i}
+                data-field="productCode"
                 placeholder="SK77-50-NK80X65…"
                 className={INPUT}
               />
@@ -192,6 +224,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                   type="number"
                   value={row[field] === 0 ? '' : row[field]}
                   onChange={e => updateRow(i, field, parseFloat(e.target.value) || 0)}
+                  onKeyDown={e => handleEnter(e, i)}
                   min={0}
                   step={field === 'quantity' ? 1 : 'any'}
                   placeholder="0"
@@ -211,6 +244,18 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Second Add Line button right under the last line, so long orders don't
+          need a scroll back up to the header */}
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          onClick={addRow}
+          className="flex items-center gap-1.5 rounded-lg border border-dashed border-blue-200 px-3 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50 hover:border-blue-300 transition-colors"
+        >
+          <Plus size={15} /> Add Line
+        </button>
+        <span className="text-xs text-gray-400">or press Enter in the last line</span>
       </div>
     </div>
   );
