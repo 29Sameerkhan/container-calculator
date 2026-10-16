@@ -10,6 +10,9 @@ interface Props {
 }
 
 const SCALE = 0.052;
+// Side view: px shift per lane further from the viewer
+const LANE_DX = 10;
+const LANE_DY = 10;
 const C_WIDTH_MM = 2352;
 
 const COLORS = [
@@ -46,6 +49,22 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
   const cL = px(container.LENGTH);
   const cH = px(container.HEIGHT);
 
+  // Side view depth: pallets sharing a strip (same x) sit in lanes across the
+  // width. Lane 0 is nearest the viewer (the left wall, y = 0); each lane further
+  // back is drawn shifted up and right so its top and right edges stay visible.
+  const laneOf = new Map<PlacedPallet, number>();
+  const strips = new Map<number, PlacedPallet[]>();
+  for (const p of placed) {
+    if (!strips.has(p.x)) strips.set(p.x, []);
+    strips.get(p.x)!.push(p);
+  }
+  strips.forEach(strip => {
+    [...strip].sort((a, b) => a.y - b.y).forEach((p, lane) => laneOf.set(p, lane));
+  });
+  const maxLane = Math.max(0, ...Array.from(laneOf.values()));
+  const sidePadTop = maxLane * LANE_DY;
+  const sidePadRight = maxLane * LANE_DX;
+
   const familyColors: Record<string, string> = {};
   let colorIdx = 0;
   for (const p of pallets) {
@@ -54,6 +73,36 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
       colorIdx++;
     }
   }
+
+  // Every rectangle in the side view, in paint order: far lanes first, then
+  // tallest first within a lane. A stack gives two rectangles (bottom on the
+  // floor, top on the bottom one).
+  const sideShapes = [...placed]
+    .sort((a, b) => (laneOf.get(b) ?? 0) - (laneOf.get(a) ?? 0) || stackHeight(b) - stackHeight(a))
+    .flatMap(placedPallet => {
+      const { pallet, stackedPallet, x, overflow } = placedPallet;
+      const lane = laneOf.get(placedPallet) ?? 0;
+      const layers = [{ p: pallet, baseMm: 0, isTop: false }];
+      if (stackedPallet) layers.push({ p: stackedPallet, baseMm: pallet.heightMm, isTop: true });
+
+      return layers.map(({ p, baseMm, isTop }) => {
+        const floorX = px(Math.min(x, container.LENGTH - 10));
+        const w = overflow ? Math.max(4, cL - floorX) : px(p.lengthMm);
+        const h = px(p.heightMm);
+        return {
+          id: p.palletId,
+          // Lanes further back shift up and right so their top/right edges show
+          x: floorX + lane * LANE_DX,
+          y: sidePadTop + cH - px(baseMm) - h - lane * LANE_DY, // floor at bottom
+          w,
+          h,
+          isTop,
+          color: overflow ? '#ef4444' : (familyColors[p.family] ?? '#94a3b8'),
+          isSel: selected === p.palletId,
+          showLabel: !overflow && w > 24 && h > 14,
+        };
+      });
+    });
 
   const selectedPallet = selected ? pallets.find(p => p.palletId === selected) : null;
   const selectedPartner = selectedPallet?.stackedWith
@@ -178,53 +227,44 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
         ) : (
           // SIDE VIEW — every pallet solid at its x position (along the length) and height.
           // A stacked pair is drawn as two rectangles: bottom from the floor, top on it.
-          // Tallest footprint drawn first so shorter side-by-side ones stay visible in front.
-          <svg
-            width={cL + 2} height={cH + 2}
-            style={{ display: 'block', border: '2px solid #1e40af', borderRadius: 4, background: '#f8faff' }}
-          >
-            {[...placed]
-              .sort((a, b) => stackHeight(b) - stackHeight(a))
-              .flatMap(({ pallet, stackedPallet, x, overflow }) => {
-                // Bottom pallet sits on the floor; the top one sits on the bottom one
-                const layers = [{ p: pallet, baseMm: 0, isTop: false }];
-                if (stackedPallet) layers.push({ p: stackedPallet, baseMm: pallet.heightMm, isTop: true });
-
-                return layers.map(({ p, baseMm, isTop }) => {
-                  const drawX = px(Math.min(x, container.LENGTH - 10));
-                  const drawW = overflow ? Math.max(4, cL - drawX) : px(p.lengthMm);
-                  const drawH = px(p.heightMm);
-                  const svgY = cH - px(baseMm) - drawH; // floor at bottom
-                  const color = overflow ? '#ef4444' : (familyColors[p.family] ?? '#94a3b8');
-                  const isSel = selected === p.palletId;
-
-                  return (
-                    <g key={p.palletId} onClick={() => setSelected(isSel ? null : p.palletId)} style={{ cursor: 'pointer' }}>
-                      <rect
-                        x={drawX + 1} y={svgY + 1} width={drawW - 2} height={drawH - 2}
-                        fill={color}
-                        // Top pallet of a stack: lighter shade of the same colour
-                        fillOpacity={isSel ? 0.9 : isTop ? 0.35 : 0.6}
-                        stroke={isSel ? '#1e40af' : color}
-                        strokeWidth={isSel ? 2.5 : 1}
-                        rx={2}
-                      />
-                      {!overflow && drawW > 24 && drawH > 14 && (
-                        // Label near the top edge so it stays visible above shorter pallets in front
-                        <text
-                          x={drawX + drawW / 2} y={svgY + 12}
-                          textAnchor="middle" dominantBaseline="middle"
-                          fontSize={Math.min(10, drawH / 2.2)}
-                          fill="white" fontWeight="600"
-                          style={{ pointerEvents: 'none', userSelect: 'none' }}
-                        >
-                          {p.palletId}
-                        </text>
-                      )}
-                    </g>
-                  );
-                });
-              })}
+          // Side-by-side pallets are offset by lane (slight 3-D shift) so none is hidden.
+          <svg width={cL + 2 + sidePadRight} height={cH + 2 + sidePadTop} style={{ display: 'block' }}>
+            {/* Real container outline; lane offsets may overhang it slightly */}
+            <rect
+              x={1} y={sidePadTop + 1} width={cL} height={cH}
+              fill="#f8faff" stroke="#1e40af" strokeWidth={2} rx={4}
+            />
+            {/* Pallet rectangles, far lanes first so nearer ones paint over them */}
+            {sideShapes.map(s => (
+              <g key={s.id} onClick={() => setSelected(s.isSel ? null : s.id)} style={{ cursor: 'pointer' }}>
+                <rect
+                  x={s.x + 1} y={s.y + 1} width={s.w - 2} height={s.h - 2}
+                  fill={s.color}
+                  // Top pallet of a stack: lighter shade of the same colour
+                  fillOpacity={s.isSel ? 0.9 : s.isTop ? 0.35 : 0.6}
+                  stroke={s.isSel ? '#1e40af' : s.color}
+                  strokeWidth={s.isSel ? 2.5 : 1}
+                  rx={2}
+                />
+              </g>
+            ))}
+            {/* Labels in a final pass so no pallet in a nearer lane can cover them;
+                each sits in its own pallet's top strip. A label may overlap a nearer
+                pallet's body, so clicking it selects the pallet it names. */}
+            {sideShapes.filter(s => s.showLabel).map(s => (
+              <text
+                key={`label-${s.id}`}
+                x={s.x + s.w / 2} y={s.y + LANE_DY / 2 + 1}
+                textAnchor="middle" dominantBaseline="middle"
+                fontSize={Math.min(9, s.h / 2.2)}
+                fill="white" fontWeight="600"
+                stroke="rgba(15, 23, 42, 0.35)" strokeWidth={2} paintOrder="stroke"
+                onClick={() => setSelected(s.isSel ? null : s.id)}
+                style={{ cursor: 'pointer', userSelect: 'none' }}
+              >
+                {s.id}
+              </text>
+            ))}
           </svg>
         )}
       </div>
