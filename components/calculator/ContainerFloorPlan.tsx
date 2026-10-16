@@ -1,7 +1,7 @@
 'use client';
 
 import { PalletPlan, ShipmentResult } from '@/lib/types';
-import { packPallets, CONTAINERS, PlacedPallet } from '@/lib/engine/floorPlan';
+import { packPallets, CONTAINERS } from '@/lib/engine/floorPlan';
 import { useState } from 'react';
 
 interface Props {
@@ -36,14 +36,6 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
   const container = CONTAINERS[containerKey];
   const placed = packPallets(pallets, container.LENGTH);
   const overflowCount = placed.filter(p => p.overflow).length;
-
-  // For side view: per x-strip, show the tallest pallet (others are behind it)
-  // Group by x position
-  const stripMap = new Map<number, PlacedPallet[]>();
-  for (const p of placed) {
-    if (!stripMap.has(p.x)) stripMap.set(p.x, []);
-    stripMap.get(p.x)!.push(p);
-  }
 
   const cW = px(C_WIDTH_MM);
   const cL = px(container.LENGTH);
@@ -156,51 +148,44 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
             <line x1={cL} y1={0} x2={cL} y2={cW} stroke="#1e40af" strokeWidth={2} />
           </svg>
         ) : (
-          // SIDE VIEW — show tallest pallet per strip; others shown as outline behind
+          // SIDE VIEW — every pallet solid at its x position (along the length) and height.
+          // Tallest drawn first so shorter side-by-side pallets stay visible in front.
           <svg
             width={cL + 2} height={cH + 2}
             style={{ display: 'block', border: '2px solid #1e40af', borderRadius: 4, background: '#f8faff' }}
           >
-            {Array.from(stripMap.entries()).map(([xMm, stripPallets]) => {
-              // Sort by height desc — tallest in front
-              const byHeight = [...stripPallets].sort((a, b) => b.pallet.heightMm - a.pallet.heightMm);
-              return byHeight.map(({ pallet, overflow }, rank) => {
-                const drawX = px(Math.min(xMm, container.LENGTH - 10));
-                const drawW = overflow ? Math.max(4, cL - drawX) : px(pallet.lengthMm);
-                const drawH = px(pallet.heightMm);
-                const svgY = cH - drawH;
-                const color = overflow ? '#ef4444' : (familyColors[pallet.family] ?? '#94a3b8');
-                const isSel = selected === pallet.palletId;
-                const isBehind = rank > 0;
+            {[...placed].sort((a, b) => b.pallet.heightMm - a.pallet.heightMm).map(({ pallet, x, overflow }) => {
+              const drawX = px(Math.min(x, container.LENGTH - 10));
+              const drawW = overflow ? Math.max(4, cL - drawX) : px(pallet.lengthMm);
+              const drawH = px(pallet.heightMm);
+              const svgY = cH - drawH; // floor at bottom
+              const color = overflow ? '#ef4444' : (familyColors[pallet.family] ?? '#94a3b8');
+              const isSel = selected === pallet.palletId;
 
-                return (
-                  <g key={pallet.palletId} onClick={() => setSelected(isSel ? null : pallet.palletId)} style={{ cursor: 'pointer' }}>
-                    <rect
-                      x={drawX + (isBehind ? 3 : 1)}
-                      y={svgY + (isBehind ? 3 : 1)}
-                      width={drawW - (isBehind ? 6 : 2)}
-                      height={drawH - (isBehind ? 6 : 2)}
-                      fill={color}
-                      fillOpacity={isSel ? 0.9 : (isBehind ? 0.25 : 0.6)}
-                      stroke={isSel ? '#1e40af' : color}
-                      strokeWidth={isBehind ? 1 : 1.5}
-                      strokeDasharray={isBehind ? '3 2' : undefined}
-                      rx={2}
-                    />
-                    {!isBehind && !overflow && drawW > 24 && drawH > 14 && (
-                      <text
-                        x={drawX + drawW / 2} y={svgY + drawH / 2}
-                        textAnchor="middle" dominantBaseline="middle"
-                        fontSize={Math.min(10, drawH / 2.2)}
-                        fill="white" fontWeight="600"
-                        style={{ pointerEvents: 'none', userSelect: 'none' }}
-                      >
-                        {pallet.palletId}
-                      </text>
-                    )}
-                  </g>
-                );
-              });
+              return (
+                <g key={pallet.palletId} onClick={() => setSelected(isSel ? null : pallet.palletId)} style={{ cursor: 'pointer' }}>
+                  <rect
+                    x={drawX + 1} y={svgY + 1} width={drawW - 2} height={drawH - 2}
+                    fill={color}
+                    fillOpacity={isSel ? 0.9 : 0.6}
+                    stroke={isSel ? '#1e40af' : color}
+                    strokeWidth={isSel ? 2.5 : 1}
+                    rx={2}
+                  />
+                  {!overflow && drawW > 24 && drawH > 14 && (
+                    // Label near the top edge so it stays visible above shorter pallets in front
+                    <text
+                      x={drawX + drawW / 2} y={svgY + 12}
+                      textAnchor="middle" dominantBaseline="middle"
+                      fontSize={Math.min(10, drawH / 2.2)}
+                      fill="white" fontWeight="600"
+                      style={{ pointerEvents: 'none', userSelect: 'none' }}
+                    >
+                      {pallet.palletId}
+                    </text>
+                  )}
+                </g>
+              );
             })}
           </svg>
         )}
