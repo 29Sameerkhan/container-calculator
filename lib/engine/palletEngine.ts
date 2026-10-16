@@ -182,7 +182,20 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
   const totalGrossKg = pallets.reduce((sum, p) => sum + p.totalGrossKg, 0);
 
   // Any pallet longer than a 20ft container's internal length rules out 20ft
-  const requires40ft = pallets.some((p) => p.lengthMm > CONTAINER_LENGTH_MM.FCL_20FT);
+  // Check 1: any single pallet too long for 20ft
+  const anyPalletTooLong = pallets.some((p) => p.lengthMm > CONTAINER_LENGTH_MM.FCL_20FT);
+  // Check 2: simulate strip-packing into 20ft — do all pallets fit by floor length?
+  const sorted20ft = [...pallets].sort((a, b) => b.lengthMm - a.lengthMm);
+  let used20ft = 0;
+  let idx = 0;
+  while (idx < sorted20ft.length) {
+    const a = sorted20ft[idx];
+    const b = sorted20ft[idx + 1];
+    const pair = b && (a.widthMm + b.widthMm) <= 2352;
+    used20ft += pair ? Math.max(a.lengthMm, b.lengthMm) : a.lengthMm;
+    idx += pair ? 2 : 1;
+  }
+  const requires40ft = anyPalletTooLong || used20ft > CONTAINER_LENGTH_MM.FCL_20FT;
 
   // Validate each pallet
   pallets.forEach((p) => {
