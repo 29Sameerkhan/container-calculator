@@ -148,7 +148,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center gap-6 mb-4">
         <div>
           <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Product Lines</h2>
           {completedCount > 0 && (
