@@ -10,14 +10,15 @@ interface StageData {
   tubeWtPerStage: number;
   tubeW: number;          // tube cross-section
   tubeH: number;
+  packingKg: number;      // box packing added to net for gross weight
 }
 
 const PUMP_STAGE_DATA: Record<string, StageData> = {
-  SK17: { basePumpLen: 336.5, lenPerStage: 60.5,  basePumpWt: 7.089,  wtPerStage: 0.9890, tubeOffset: 110, baseTubeWt: 1.7395, tubeWtPerStage: 0.1815, tubeW: 152, tubeH: 152 },
-  SK30: { basePumpLen: 372,   lenPerStage: 96,     basePumpWt: 8.10,   wtPerStage: 1.8500, tubeOffset: 110, baseTubeWt: 1.846,  tubeWtPerStage: 0.2880, tubeW: 152, tubeH: 152 },
-  SK46: { basePumpLen: 396,   lenPerStage: 113,    basePumpWt: 8.5775, wtPerStage: 1.7775, tubeOffset: 110, baseTubeWt: 1.918,  tubeWtPerStage: 0.3390, tubeW: 152, tubeH: 152 },
-  SK60: { basePumpLen: 396,   lenPerStage: 113,    basePumpWt: 8.5225, wtPerStage: 1.7225, tubeOffset: 110, baseTubeWt: 1.918,  tubeWtPerStage: 0.3390, tubeW: 152, tubeH: 152 },
-  SK09: { basePumpLen: 242,   lenPerStage: 50,     basePumpWt: 1.896,  wtPerStage: 0.4760, tubeOffset: 100, baseTubeWt: 0.6814, tubeWtPerStage: 0.0850, tubeW: 100, tubeH: 100 },
+  SK17: { basePumpLen: 336.5, lenPerStage: 60.5,  basePumpWt: 7.089,  wtPerStage: 0.9890, tubeOffset: 110, baseTubeWt: 1.7395, tubeWtPerStage: 0.1815, tubeW: 152, tubeH: 152, packingKg: 1.0 },
+  SK30: { basePumpLen: 372,   lenPerStage: 96,     basePumpWt: 8.10,   wtPerStage: 1.8500, tubeOffset: 110, baseTubeWt: 1.846,  tubeWtPerStage: 0.2880, tubeW: 152, tubeH: 152, packingKg: 1.0 },
+  SK46: { basePumpLen: 396,   lenPerStage: 113,    basePumpWt: 8.5775, wtPerStage: 1.7775, tubeOffset: 110, baseTubeWt: 1.918,  tubeWtPerStage: 0.3390, tubeW: 152, tubeH: 152, packingKg: 1.0 },
+  SK60: { basePumpLen: 396,   lenPerStage: 113,    basePumpWt: 8.5225, wtPerStage: 1.7225, tubeOffset: 110, baseTubeWt: 1.918,  tubeWtPerStage: 0.3390, tubeW: 152, tubeH: 152, packingKg: 1.0 },
+  SK09: { basePumpLen: 242,   lenPerStage: 50,     basePumpWt: 1.896,  wtPerStage: 0.4760, tubeOffset: 100, baseTubeWt: 0.6814, tubeWtPerStage: 0.0850, tubeW: 100, tubeH: 100, packingKg: 1.0 },
 };
 
 export const MIN_STAGES = 1;
@@ -44,5 +45,6 @@ export function calcPumpBox(series: string, stages: number) {
   const tubeLen = pumpLen + s.tubeOffset;
   const pumpWt  = s.basePumpWt + (stages - 1) * s.wtPerStage;
   const tubeWt  = s.baseTubeWt + (stages - 1) * s.tubeWtPerStage;
-  return { L: Math.round(tubeLen), W: s.tubeW, H: s.tubeH, netKg: Math.round((pumpWt + tubeWt) * 1000) / 1000 };
+  const netKg   = Math.round((pumpWt + tubeWt) * 1000) / 1000;
+  return { L: Math.round(tubeLen), W: s.tubeW, H: s.tubeH, netKg, grossKg: Math.round((netKg + s.packingKg) * 1000) / 1000 };
 }

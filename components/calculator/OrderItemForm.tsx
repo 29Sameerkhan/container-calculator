@@ -78,6 +78,8 @@ function applyStages(row: OrderItem): OrderItem {
     boxWidthMm: box?.W ?? 0,
     boxHeightMm: box?.H ?? 0,
     netWeightKg: box?.netKg ?? 0,
+    // Gross stays editable: filled only when a box is calculated, never cleared
+    grossWeightKg: box?.grossKg ?? row.grossWeightKg,
   };
 }
 
@@ -147,10 +149,13 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     } else {
       updated[index] = { ...updated[index], [field]: value };
     }
-    if (field === 'productType' || field === 'palletFamily' || field === 'stages') {
-      updated[index] = applyStages(updated[index]);
-    }
+    const refilled = field === 'productType' || field === 'palletFamily' || field === 'stages';
+    if (refilled) updated[index] = applyStages(updated[index]);
     commitRows(updated);
+    // Stage box calculated: gross was auto-filled
+    if (refilled && stageSeriesFor(updated[index].palletFamily) && isValidStages(updated[index].stages)) {
+      flashAutoFilled(index, false);
+    }
   }
 
   // Item code auto-parse. A paste is parsed in the onChange that carries the
@@ -159,19 +164,22 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
   // undoes a Family/Stages the coordinator overrode by hand.
   const pastedRow = useRef<number | null>(null);
   const codeOnFocus = useRef('');
-  const [flashRow, setFlashRow] = useState<number | null>(null);
+  // Row whose auto-filled fields are highlighted: Gross always, Stages too when
+  // it came from the item code (not when the coordinator typed it)
+  const [flash, setFlash] = useState<{ row: number; stages: boolean } | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (flashTimer.current) clearTimeout(flashTimer.current);
   }, []);
 
-  // Yellow Stages field, then a 1.5s fade back (the fade is the transition
+  // Yellow background, then a 1.5s fade back (the fade is the transition
   // that runs when the highlight class is removed)
-  function flashStages(index: number) {
+  function flashAutoFilled(index: number, stages: boolean) {
     if (flashTimer.current) clearTimeout(flashTimer.current);
-    setFlashRow(index);
-    flashTimer.current = setTimeout(() => setFlashRow(null), 300);
+    setFlash({ row: index, stages });
+    flashTimer.current = setTimeout(() => setFlash(null), 300);
   }
+  const flashClass = (on: boolean) => (on ? 'bg-yellow-200' : 'transition-colors duration-[1500ms]');
 
   function changeProductCode(index: number, code: string) {
     const pasted = pastedRow.current === index;
@@ -180,7 +188,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     const parsed = pasted ? parseItemCode(row) : null;
     if (parsed) codeOnFocus.current = code; // already parsed; don't redo on blur
     commitRows(rows.map((r, i) => (i === index ? parsed ?? row : r)));
-    if (parsed) flashStages(index);
+    if (parsed) flashAutoFilled(index, true);
   }
 
   function blurProductCode(index: number) {
@@ -188,7 +196,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     const parsed = parseItemCode(rows[index]);
     if (!parsed) return;
     commitRows(rows.map((r, i) => (i === index ? parsed : r)));
-    flashStages(index);
+    flashAutoFilled(index, true);
   }
 
   // Focus a row's Product Code field. A just-added row isn't in the DOM yet, so
@@ -323,7 +331,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                       placeholder={`${MIN_STAGES}–${MAX_STAGES}`}
                       title={badStages ? `Stages must be a whole number from ${MIN_STAGES} to ${MAX_STAGES}` : undefined}
                       className={`${INPUT} ${badStages ? 'border-red-400 ring-1 ring-red-300' : ''} ${
-                        flashRow === i ? 'bg-yellow-200' : 'transition-colors duration-[1500ms]'
+                        flashClass(flash?.row === i && flash.stages)
                       }`}
                     />
                   </div>
@@ -357,7 +365,9 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                   step={field === 'quantity' ? 1 : 'any'}
                   placeholder="0"
                   title={field === 'quantity' && !isWholeQty(row) ? 'Quantity must be a whole number' : undefined}
-                  className={`${INPUT} ${field === 'quantity' && !isWholeQty(row) ? 'border-red-400 ring-1 ring-red-300' : ''}`}
+                  className={`${INPUT} ${field === 'quantity' && !isWholeQty(row) ? 'border-red-400 ring-1 ring-red-300' : ''} ${
+                    field === 'grossWeightKg' ? flashClass(flash?.row === i) : ''
+                  }`}
                 />
               </div>
               );
