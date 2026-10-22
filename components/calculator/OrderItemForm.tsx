@@ -81,6 +81,30 @@ function applyStages(row: OrderItem): OrderItem {
   };
 }
 
+// Pump families whose stage count can be read from the item code
+const PARSE_FAMILIES = ['SK09', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B'];
+
+// Pump item codes start with family then stages, e.g. SK17-07-NK6X6-25BC-1N32-2.
+// Fills Family and Stages (and so the box) from the code. Returns null, leaving
+// the row as it is, unless the line is a pump and both parts are valid.
+function parseItemCode(row: OrderItem): OrderItem | null {
+  if (row.productType !== 'pump') return null;
+  const [familyPart = '', stagesPart = ''] = row.productCode.trim().split('-');
+  const series = familyPart.toUpperCase();
+  if (!PARSE_FAMILIES.includes(series) || !/^\d+$/.test(stagesPart)) return null;
+  const stages = parseInt(stagesPart, 10);
+  if (!isValidStages(stages)) return null;
+
+  // SK09 is split into size families: keep the one chosen, else the first listed
+  const palletFamily = series !== 'SK09'
+    ? series
+    : row.palletFamily.startsWith('SK09-')
+      ? row.palletFamily
+      : getFamilyOptions('pump').find(f => f.startsWith('SK09-'));
+  if (!palletFamily) return null;
+  return applyStages({ ...row, palletFamily, stages });
+}
+
 // Quantity is a whole number of boxes. A decimal is kept as typed (not silently
 // rounded) and the row stays incomplete, so it never reaches the API.
 function isWholeQty(row: OrderItem): boolean {
@@ -127,6 +151,44 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
       updated[index] = applyStages(updated[index]);
     }
     commitRows(updated);
+  }
+
+  // Item code auto-parse. A paste is parsed in the onChange that carries the
+  // pasted text (so code and parsed fields are committed together); typing is
+  // parsed on blur, only if the code changed while focused, so blurring never
+  // undoes a Family/Stages the coordinator overrode by hand.
+  const pastedRow = useRef<number | null>(null);
+  const codeOnFocus = useRef('');
+  const [flashRow, setFlashRow] = useState<number | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+  }, []);
+
+  // Yellow Stages field, then a 1.5s fade back (the fade is the transition
+  // that runs when the highlight class is removed)
+  function flashStages(index: number) {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setFlashRow(index);
+    flashTimer.current = setTimeout(() => setFlashRow(null), 300);
+  }
+
+  function changeProductCode(index: number, code: string) {
+    const pasted = pastedRow.current === index;
+    pastedRow.current = null;
+    const row = { ...rows[index], productCode: code };
+    const parsed = pasted ? parseItemCode(row) : null;
+    if (parsed) codeOnFocus.current = code; // already parsed; don't redo on blur
+    commitRows(rows.map((r, i) => (i === index ? parsed ?? row : r)));
+    if (parsed) flashStages(index);
+  }
+
+  function blurProductCode(index: number) {
+    if (rows[index].productCode === codeOnFocus.current) return;
+    const parsed = parseItemCode(rows[index]);
+    if (!parsed) return;
+    commitRows(rows.map((r, i) => (i === index ? parsed : r)));
+    flashStages(index);
   }
 
   // Focus a row's Product Code field. A just-added row isn't in the DOM yet, so
@@ -207,7 +269,10 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
               <input
                 type="text"
                 value={row.productCode}
-                onChange={e => updateRow(i, 'productCode', e.target.value)}
+                onChange={e => changeProductCode(i, e.target.value)}
+                onPaste={() => { pastedRow.current = i; }}
+                onFocus={e => { codeOnFocus.current = e.target.value; }}
+                onBlur={() => blurProductCode(i)}
                 onKeyDown={e => handleEnter(e, i)}
                 data-row={i}
                 data-field="productCode"
@@ -257,7 +322,9 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                       step={1}
                       placeholder={`${MIN_STAGES}–${MAX_STAGES}`}
                       title={badStages ? `Stages must be a whole number from ${MIN_STAGES} to ${MAX_STAGES}` : undefined}
-                      className={`${INPUT} ${badStages ? 'border-red-400 ring-1 ring-red-300' : ''}`}
+                      className={`${INPUT} ${badStages ? 'border-red-400 ring-1 ring-red-300' : ''} ${
+                        flashRow === i ? 'bg-yellow-200' : 'transition-colors duration-[1500ms]'
+                      }`}
                     />
                   </div>
                 );
