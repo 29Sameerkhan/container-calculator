@@ -9,30 +9,17 @@ import {
   CONTAINERS,
   CONTAINER_LENGTH_MM,
   FCL_20FT_BAND_MAX_CBM,
-  PUMP_PALLET_WIDTH,
-  MOTOR_PALLET_WIDTH,
   WOOD_WEIGHT,
   MAX_STACK_HEIGHT_MM,
+  STANDARD_PALLETS,
+  MAX_PALLET_HEIGHT_MM,
   PALLET_BASE_HEIGHT_MM,
   MAX_PALLET_GROSS_KG,
   MAX_STACKED_HEIGHT_MM,
 } from '@/lib/constants';
 import { packPallets } from '@/lib/engine/floorPlan';
 
-// ─── STEP 1: Resolve pallet width for an item ────────────────────────────────
-export function resolvePalletWidth(item: OrderItem): number {
-  if (item.productType === 'motor-V4') return MOTOR_PALLET_WIDTH['V4'];
-  if (item.productType === 'motor-V6') return MOTOR_PALLET_WIDTH['V6'];
-  if (item.productType === 'controller' || item.productType === 'spare') {
-    console.warn('Controller/spare pallet width defaulting to 715mm — confirm with Mahendra');
-    return 715;
-  }
-  const width = PUMP_PALLET_WIDTH[item.palletFamily];
-  if (!width) throw new Error(`Unknown pallet family: ${item.palletFamily}`);
-  return width;
-}
-
-// ─── STEP 2: Resolve wood weight for a pallet ────────────────────────────────
+// ─── STEP 1: Resolve wood weight for a pallet ────────────────────────────────
 export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number {
   if (item.productType === 'motor-V4' || item.productType === 'motor-V6') {
     return isMixedSku ? WOOD_WEIGHT.MOTOR_MIXED_SKU : WOOD_WEIGHT.MOTOR_SINGLE_SKU;
@@ -43,41 +30,65 @@ export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number 
     : WOOD_WEIGHT.PUMP_LIGHT;
 }
 
-// ─── STEP 3: Compute pallet geometry from box stacking ───────────────────────
-export function computePalletGeometry(
-  item: OrderItem,
-  palletWidthMm: number
-): { lengthMm: number; heightMm: number; unitsPerRow: number; rows: number; layers: number } {
-  // How many boxes fit side-by-side across the pallet width?
-  const unitsPerRow = Math.floor(palletWidthMm / item.boxWidthMm);
-  if (unitsPerRow === 0) {
-    throw new Error(
-      `Box width ${item.boxWidthMm}mm exceeds pallet width ${palletWidthMm}mm for ${item.productCode}`
-    );
-  }
-
-  // Stack layers vertically (motors up to 2 layers, pumps 1)
-  const isMotor = item.productType === 'motor-V4' || item.productType === 'motor-V6';
-  let layers = isMotor ? 2 : 1;
-  let heightMm = layers * item.boxHeightMm + PALLET_BASE_HEIGHT_MM;
-
-  // Drop layers until the pallet (including its wooden base) fits under the stack limit
-  while (heightMm > MAX_STACK_HEIGHT_MM && layers > 1) {
-    layers--;
-    heightMm = layers * item.boxHeightMm + PALLET_BASE_HEIGHT_MM;
-  }
-
-  // How many rows along the pallet length?
-  const rows = Math.ceil(item.quantity / (unitsPerRow * layers));
-  const lengthMm = rows * item.boxLengthMm;
-
-  return { lengthMm, heightMm, unitsPerRow, rows, layers };
+// ─── STEP 2: Arrange boxes on a pallet base ──────────────────────────────────
+// How one product line's boxes sit on a full pallet
+export interface PalletLayout {
+  baseName: string;      // Large / Medium / Small, or Long for an over-length box
+  isLongPallet: boolean; // box longer than any standard base
+  baseLengthMm: number;  // pallet_L
+  baseWidthMm: number;   // pallet_W
+  boxAlongMm: number;    // box side running along the pallet length
+  boxAcrossMm: number;   // box side running across the pallet width
+  boxesPerRow: number;   // along the length
+  boxesPerCol: number;   // across the width
+  boxesPerLayer: number;
+  maxLayers: number;
+  boxesPerPallet: number;
 }
 
-// ─── STEP 4: Build pallet plans from all orders' items ───────────────────────
-export function buildPalletPlans(orders: ShipmentOrder[]): PalletPlan[] {
+// Standard bases are tried Large → Medium → Small; on each the box is tried as
+// entered, then turned 90° on the pallet. A box longer than the Large base gets
+// a long pallet as long as the box. Returns null when the box fits no pallet.
+export function computePalletLayout(item: OrderItem): PalletLayout | null {
+  const maxLayers = Math.floor((MAX_PALLET_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
+  if (maxLayers === 0) return null; // a single box is taller than the pallet limit
+
+  const layout = (
+    baseName: string, baseLengthMm: number, baseWidthMm: number, boxAlongMm: number, boxAcrossMm: number
+  ): PalletLayout => {
+    const boxesPerRow = Math.floor(baseLengthMm / boxAlongMm);
+    const boxesPerCol = Math.floor(baseWidthMm / boxAcrossMm);
+    const boxesPerLayer = boxesPerRow * boxesPerCol;
+    return {
+      baseName, isLongPallet: baseName === 'Long', baseLengthMm, baseWidthMm, boxAlongMm, boxAcrossMm,
+      boxesPerRow, boxesPerCol, boxesPerLayer, maxLayers, boxesPerPallet: boxesPerLayer * maxLayers,
+    };
+  };
+
+  const { boxLengthMm: L, boxWidthMm: W } = item;
+  for (const base of STANDARD_PALLETS) {
+    for (const [along, across] of [[L, W], [W, L]]) {
+      const fit = layout(base.name, base.lengthMm, base.widthMm, along, across);
+      if (fit.boxesPerPallet > 0) return fit;
+    }
+  }
+
+  // Long pallet: as long as the box, one box per row, still filled across and up
+  const large = STANDARD_PALLETS[0];
+  if (L > large.lengthMm && L <= CONTAINER_LENGTH_MM.FCL_40FT) {
+    const fit = layout('Long', L, large.widthMm, L, W);
+    if (fit.boxesPerPallet > 0) return fit;
+  }
+  return null;
+}
+
+// ─── STEP 3: Build pallet plans from all orders' items ───────────────────────
+// Each line's boxes are spread over as many pallets as needed. A pallet is also
+// capped by weight so it never exceeds the forklift limit (MAX_PALLET_GROSS_KG).
+// Lines whose box fits no pallet are left out and reported in warnings.
+export function buildPalletPlans(orders: ShipmentOrder[]): { pallets: PalletPlan[]; warnings: string[] } {
   const pallets: PalletPlan[] = [];
-  const MAX_PALLET_LENGTH_MM = CONTAINER_LENGTH_MM.FCL_40FT;
+  const warnings: string[] = [];
 
   // Flatten items across orders, keeping each item's owner; numbering runs
   // across the whole shipment so pallet IDs stay unique
@@ -87,43 +98,46 @@ export function buildPalletPlans(orders: ShipmentOrder[]): PalletPlan[] {
 
   lines.forEach(({ item, customerName, orderRef }, itemIndex) => {
     const palletNumber = String(itemIndex + 1).padStart(2, '0');
-    const palletWidthMm = resolvePalletWidth(item);
-    const { heightMm, unitsPerRow, layers } = computePalletGeometry(item, palletWidthMm);
-    const unitsPerLayer = unitsPerRow * layers;
+    const layout = computePalletLayout(item);
+    if (!layout) {
+      const box = `${item.boxLengthMm}×${item.boxWidthMm}×${item.boxHeightMm}mm`;
+      warnings.push(
+        `SK-${palletNumber} (${item.productCode}): OVERSIZED — box ${box} fits no pallet. ${item.quantity} box${item.quantity > 1 ? 'es' : ''} left out of this plan; arrange special handling with Mahendra`
+      );
+      return;
+    }
 
-    // How many units can fit in one pallet given max length?
-    const maxRowsPerPallet = Math.floor(MAX_PALLET_LENGTH_MM / item.boxLengthMm);
-    const maxUnitsPerPallet = maxRowsPerPallet * unitsPerLayer;
-    if (maxUnitsPerPallet === 0) {
-      throw new Error(
-        `${item.productCode}: pallet length ${item.boxLengthMm}mm exceeds maximum container length — check box dimensions or quantity`
+    const isMixedSku = false; // single-item call; mixed handled separately
+    const woodWeightKg = resolveWoodWeight(item, isMixedSku);
+    const boxesByWeight = Math.floor((MAX_PALLET_GROSS_KG - woodWeightKg) / item.grossWeightKg);
+    if (boxesByWeight < 1) {
+      warnings.push(
+        `SK-${palletNumber} (${item.productCode}): one box on its pallet weighs ${item.grossWeightKg + woodWeightKg}kg — over the ${MAX_PALLET_GROSS_KG}kg forklift limit`
       );
     }
+    const boxesPerPallet = Math.max(1, Math.min(layout.boxesPerPallet, boxesByWeight));
 
     let remaining = item.quantity;
     let splitIndex = 1;
 
     while (remaining > 0) {
-      const unitsThisPallet = Math.min(remaining, maxUnitsPerPallet);
-      const rowsThisPallet = Math.ceil(unitsThisPallet / unitsPerLayer);
-      const lengthMm = rowsThisPallet * item.boxLengthMm;
+      const unitsThisPallet = Math.min(remaining, boxesPerPallet);
+      // Fewest layers that hold these boxes, then rows for the fullest layer
+      const layers = Math.ceil(unitsThisPallet / layout.boxesPerLayer);
+      const rows = Math.ceil(Math.ceil(unitsThisPallet / layers) / layout.boxesPerCol);
+      const lengthMm = Math.min(rows * layout.boxAlongMm, layout.baseLengthMm);
+      const widthMm = Math.min(layout.boxesPerCol * layout.boxAcrossMm, layout.baseWidthMm);
+      const heightMm = layers * item.boxHeightMm + PALLET_BASE_HEIGHT_MM;
 
-      if (lengthMm > CONTAINER_LENGTH_MM.FCL_40FT) {
-        throw new Error(
-          `${item.productCode}: pallet length ${lengthMm}mm exceeds maximum container length — check box dimensions or quantity`
-        );
-      }
-
-      const cbm = (lengthMm * palletWidthMm * heightMm) / 1_000_000_000;
+      const cbm = (lengthMm * widthMm * heightMm) / 1_000_000_000;
       // Item weights are per box
       const netWeightKg = item.netWeightKg * unitsThisPallet;
       const grossWeightKg = item.grossWeightKg * unitsThisPallet;
-      const isMixedSku = false; // single-item call; mixed handled separately
-      const woodWeightKg = resolveWoodWeight(item, isMixedSku);
       const totalGrossKg = grossWeightKg + woodWeightKg;
+      const palletId = `SK-${palletNumber}${splitIndex > 1 ? `-P${splitIndex}` : ''}`;
 
       pallets.push({
-        palletId: `SK-${palletNumber}${splitIndex > 1 ? `-P${splitIndex}` : ''}`,
+        palletId,
         customerName,
         orderRef,
         family: item.palletFamily,
@@ -131,7 +145,7 @@ export function buildPalletPlans(orders: ShipmentOrder[]): PalletPlan[] {
         productCodes: [item.productCode], // one SKU per pallet until mixed palletising exists
         quantity: unitsThisPallet,
         lengthMm,
-        widthMm: palletWidthMm,
+        widthMm,
         heightMm,
         cbm: Math.round(cbm * 1000) / 1000,
         netWeightKg: Math.round(netWeightKg * 10) / 10,
@@ -139,14 +153,21 @@ export function buildPalletPlans(orders: ShipmentOrder[]): PalletPlan[] {
         woodWeightKg,
         totalGrossKg: Math.round(totalGrossKg * 10) / 10,
         isMixedSku,
+        ...(layout.isLongPallet && { isLongPallet: true }),
       });
+
+      if (layout.isLongPallet) {
+        warnings.push(
+          `Pallet ${palletId} is ${item.boxLengthMm}mm long — needs flat-bed or special handling, verify with Mahendra`
+        );
+      }
 
       remaining -= unitsThisPallet;
       splitIndex++;
     }
   });
 
-  return pallets;
+  return { pallets, warnings };
 }
 
 // ─── STEP 4b: Floor fit + conditional stacking ───────────────────────────────
@@ -233,9 +254,8 @@ function summariseByOrder(orders: ShipmentOrder[], pallets: PalletPlan[]): Custo
 export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
   // Pallets start unstacked; stacking is applied below only if it is the
   // difference between fitting a container floor or not
-  const built = buildPalletPlans(orders);
+  const { pallets: built, warnings } = buildPalletPlans(orders);
   let pallets = built;
-  const warnings: string[] = [];
 
   // Stacking never changes these totals
   const totalCBM = built.reduce((sum, p) => sum + p.cbm, 0);
@@ -250,9 +270,6 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
       warnings.push(
         `${p.palletId}: length ${p.lengthMm}mm exceeds 20ft internal length ${CONTAINER_LENGTH_MM.FCL_20FT}mm — 20ft container not possible`
       );
-    }
-    if (p.lengthMm > 9000) {
-      warnings.push(`${p.palletId}: length ${p.lengthMm}mm — verify with Mahendra before loading`);
     }
   });
 
@@ -322,8 +339,15 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
       warnings.push(`40ft payload at ${(utilisation * 100).toFixed(0)}% — approaching limit`);
   }
 
+  // Pallet positions on the recommended container's floor, saved with the
+  // result so a reloaded calculation draws exactly this plan
+  const placed = containerRecommendation === 'LCL'
+    ? []
+    : packPallets(pallets, containerRecommendation === 'FCL_20FT' ? len20 : len40);
+
   return {
     pallets,
+    placed,
     perCustomer: summariseByOrder(orders, pallets),
     totalCBM: Math.round(totalCBM * 1000) / 1000,
     totalGrossKg: Math.round(totalGrossKg * 10) / 10,

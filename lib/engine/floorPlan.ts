@@ -1,13 +1,6 @@
-import { PalletPlan } from '@/lib/types';
+import { PalletPlan, PlacedPallet } from '@/lib/types';
 
-export interface PlacedPallet {
-  pallet: PalletPlan;      // the floor pallet (bottom of a stack)
-  stackedPallet?: PalletPlan; // pallet sitting on top of it, if stacked
-  x: number;       // mm from container front
-  y: number;       // mm from left wall
-  rotated: boolean;
-  overflow: boolean; // true if past container length
-}
+export type { PlacedPallet };
 
 export const CONTAINERS = {
   LCL:      { LENGTH: 0,     WIDTH: 2352, HEIGHT: 2393 },

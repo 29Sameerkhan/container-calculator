@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
+import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { formatSavedAt } from '@/lib/format';
 import { ShipmentResult } from '@/lib/types';
@@ -118,6 +119,13 @@ export default function CalculationDetailPage() {
               result={calc.result}
               customerName={isConsolidated ? '' : calc.customerName}
               orderRef={isConsolidated ? '' : calc.orderRef}
+            />
+            {/* Drawn from the positions saved with the result, so it matches what
+                was shown at calculation time */}
+            <ContainerFloorPlan
+              pallets={calc.result.pallets}
+              recommendation={calc.result.containerRecommendation}
+              placed={calc.result.placed}
             />
             <PalletPlanTable pallets={calc.result.pallets} />
           </>

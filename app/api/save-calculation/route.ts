@@ -10,6 +10,7 @@ const SaveSchema = z.object({
   items: z.array(z.any()).min(1),
   result: z.object({
     pallets: z.array(z.any()),
+    placed: z.array(z.any()).optional(), // floor plan positions, so history redraws the same plan
     totalCBM: z.number(),
     totalGrossKg: z.number(),
     containerRecommendation: z.string(),

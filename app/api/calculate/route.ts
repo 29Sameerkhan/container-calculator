@@ -13,6 +13,7 @@ const OrderItemSchema = z.object({
   boxHeightMm: z.number().min(1),
   netWeightKg: z.number().min(0),
   grossWeightKg: z.number().min(0.01),
+  stages: z.number().int().min(1).max(20).optional(),
   customer: z.string().optional(),
   weightManualEntry: z.boolean().optional(),
 });

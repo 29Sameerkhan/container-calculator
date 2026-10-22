@@ -8,6 +8,8 @@ export interface OrderItem {
   boxHeightMm: number;
   netWeightKg: number;   // per box
   grossWeightKg: number; // per box
+  /** Pump stages (SK09/SK17/SK30/SK46/SK60): box size and net weight are calculated from this */
+  stages?: number;
   /** Customer name — used for pallet consolidation grouping (items from different customers are never co-palletised) */
   customer?: string;
   // fallback: weight entered manually if ERP missing
@@ -50,6 +52,18 @@ export interface PalletPlan {
   stackedWith?: string;
   /** Position in the stack: the heavier pallet is always the bottom one */
   stackPosition?: 'bottom' | 'top';
+  /** True when the box is longer than a standard pallet, so the pallet is as long as the box */
+  isLongPallet?: boolean;
+}
+
+// One footprint's position on the container floor (see packPallets)
+export interface PlacedPallet {
+  pallet: PalletPlan;      // the floor pallet (bottom of a stack)
+  stackedPallet?: PalletPlan; // pallet sitting on top of it, if stacked
+  x: number;       // mm from container front
+  y: number;       // mm from left wall
+  rotated: boolean;
+  overflow: boolean; // true if past container length
 }
 
 // Totals for one order within a shipment
@@ -63,6 +77,9 @@ export interface CustomerSummary {
 
 export interface ShipmentResult {
   pallets: PalletPlan[];
+  /** Floor plan positions in the recommended container (empty for LCL).
+   *  Missing on results saved before floor plans were stored. */
+  placed?: PlacedPallet[];
   perCustomer: CustomerSummary[];
   totalCBM: number;
   totalGrossKg: number;

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
+import { calcPumpBox, isValidStages, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
 import { Trash2, Plus } from 'lucide-react';
 
 interface Props {
@@ -47,6 +48,8 @@ const ROW_COLS =
   'grid-cols-2 sm:grid-cols-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1.1fr)_repeat(6,minmax(0,1fr))_1.5rem] gap-2';
 
 const FIELD_LABEL = 'block lg:hidden text-[11px] text-gray-500 uppercase tracking-wide mb-0.5';
+// Stage rows replace the L/W/H/Net columns, so their labels show on every screen
+const STAGE_LABEL = 'block text-[11px] text-gray-500 uppercase tracking-wide mb-0.5';
 const INPUT =
   'w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400';
 
@@ -61,6 +64,22 @@ const emptyRow = (): Omit<OrderItem, 'palletFamily'> & { palletFamily: string } 
   netWeightKg: 0,
   grossWeightKg: 0,
 });
+
+// Stage families: box size and net weight follow the stage count. Without a
+// valid count they are cleared, so the line stays incomplete until it is entered.
+// Other families drop any stage count and keep their manual values.
+function applyStages(row: OrderItem): OrderItem {
+  const series = stageSeriesFor(row.palletFamily);
+  if (!series) return { ...row, stages: undefined };
+  const box = isValidStages(row.stages) ? calcPumpBox(series, row.stages) : null;
+  return {
+    ...row,
+    boxLengthMm: box?.L ?? 0,
+    boxWidthMm: box?.W ?? 0,
+    boxHeightMm: box?.H ?? 0,
+    netWeightKg: box?.netKg ?? 0,
+  };
+}
 
 // Quantity is a whole number of boxes. A decimal is kept as typed (not silently
 // rounded) and the row stays incomplete, so it never reaches the API.
@@ -91,7 +110,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     setRows(updated);
   }
 
-  function updateRow(index: number, field: keyof OrderItem, value: string | number) {
+  function updateRow(index: number, field: keyof OrderItem, value: string | number | undefined) {
     const updated = [...rows];
     // If product type changes, reset pallet family to first valid option
     if (field === 'productType') {
@@ -103,6 +122,9 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
       };
     } else {
       updated[index] = { ...updated[index], [field]: value };
+    }
+    if (field === 'productType' || field === 'palletFamily' || field === 'stages') {
+      updated[index] = applyStages(updated[index]);
     }
     commitRows(updated);
   }
@@ -217,7 +239,46 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                 ))}
               </select>
             </div>
-            {NUMBER_FIELDS.map(({ field, label, className }) => (
+            {NUMBER_FIELDS.map(({ field, label, className }) => {
+              const series = stageSeriesFor(row.palletFamily);
+              // Stage families: Stages input in the L slot, calculated box across W/H/Net
+              if (series && field === 'boxLengthMm') {
+                const badStages = row.stages !== undefined && !isValidStages(row.stages);
+                return (
+                  <div key="stages">
+                    <label className={STAGE_LABEL}>Stages</label>
+                    <input
+                      type="number"
+                      value={row.stages ?? ''}
+                      onChange={e => updateRow(i, 'stages', e.target.value === '' ? undefined : Number(e.target.value))}
+                      onKeyDown={e => handleEnter(e, i)}
+                      min={MIN_STAGES}
+                      max={MAX_STAGES}
+                      step={1}
+                      placeholder={`${MIN_STAGES}–${MAX_STAGES}`}
+                      title={badStages ? `Stages must be a whole number from ${MIN_STAGES} to ${MAX_STAGES}` : undefined}
+                      className={`${INPUT} ${badStages ? 'border-red-400 ring-1 ring-red-300' : ''}`}
+                    />
+                  </div>
+                );
+              }
+              if (series && field === 'boxWidthMm') {
+                const filled = row.boxLengthMm > 0;
+                const summary = `${row.boxLengthMm} × ${row.boxWidthMm} × ${row.boxHeightMm} mm · ${row.netWeightKg} kg net`;
+                return (
+                  <div key="stageBox" className="col-span-2 lg:col-span-3">
+                    <label className={STAGE_LABEL}>Box from {series} stages (L × W × H · net/box)</label>
+                    <div
+                      title={filled ? summary : undefined}
+                      className="w-full truncate rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-mono text-gray-700"
+                    >
+                      {filled ? summary : <span className="font-sans text-gray-400">Enter stages</span>}
+                    </div>
+                  </div>
+                );
+              }
+              if (series && (field === 'boxHeightMm' || field === 'netWeightKg')) return null;
+              return (
               <div key={field} className={className}>
                 <label className={FIELD_LABEL}>{label}</label>
                 <input
@@ -232,7 +293,8 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                   className={`${INPUT} ${field === 'quantity' && !isWholeQty(row) ? 'border-red-400 ring-1 ring-red-300' : ''}`}
                 />
               </div>
-            ))}
+              );
+            })}
             <div className="flex justify-end lg:justify-center pb-1">
               <button
                 onClick={() => removeRow(i)}

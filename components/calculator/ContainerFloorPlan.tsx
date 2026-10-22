@@ -7,6 +7,9 @@ import { useState } from 'react';
 interface Props {
   pallets: PalletPlan[];
   recommendation: ShipmentResult['containerRecommendation'];
+  // Positions computed by the engine (result.placed). Results saved before
+  // positions were stored have none, so they are packed here instead.
+  placed?: PlacedPallet[];
 }
 
 const SCALE = 0.052;
@@ -27,7 +30,7 @@ function stackHeight(p: PlacedPallet) {
   return p.pallet.heightMm + (p.stackedPallet?.heightMm ?? 0);
 }
 
-export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
+export default function ContainerFloorPlan({ pallets, recommendation, placed: savedPlaced }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<'top' | 'side'>('top');
 
@@ -42,7 +45,7 @@ export default function ContainerFloorPlan({ pallets, recommendation }: Props) {
 
   const containerKey = recommendation === 'FCL_20FT' ? 'FCL_20FT' : 'FCL_40FT';
   const container = CONTAINERS[containerKey];
-  const placed = packPallets(pallets, container.LENGTH);
+  const placed = savedPlaced ?? packPallets(pallets, container.LENGTH);
   const overflowCount = placed.filter(p => p.overflow).length;
 
   const cW = px(C_WIDTH_MM);
