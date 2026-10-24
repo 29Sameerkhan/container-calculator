@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { computeShipment } from '@/lib/engine/palletEngine';
+import { MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
 import { OrderItem, ShipmentOrder } from '@/lib/types';
 import { z } from 'zod';
 
@@ -13,7 +14,7 @@ const OrderItemSchema = z.object({
   boxHeightMm: z.number().min(1),
   netWeightKg: z.number().min(0),
   grossWeightKg: z.number().min(0.01),
-  stages: z.number().int().min(1).max(20).optional(),
+  stages: z.number().int().min(MIN_STAGES).max(MAX_STAGES).optional(),
   customer: z.string().optional(),
   weightManualEntry: z.boolean().optional(),
 });
