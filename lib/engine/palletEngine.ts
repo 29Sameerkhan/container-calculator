@@ -1,27 +1,46 @@
 import {
-  CustomerSummary,
   OrderItem,
   PalletPlan,
-  ShipmentOrder,
   ShipmentResult,
 } from '@/lib/types';
 import {
   CONTAINERS,
   CONTAINER_LENGTH_MM,
-  FCL_20FT_BAND_MAX_CBM,
+  PUMP_PALLET_WIDTH,
+  MOTOR_PALLET_WIDTH,
   WOOD_WEIGHT,
   MAX_STACK_HEIGHT_MM,
-  STANDARD_PALLETS,
-  MAX_PALLET_HEIGHT_MM,
   PALLET_BASE_HEIGHT_MM,
   MAX_PALLET_GROSS_KG,
-  MAX_STACKED_HEIGHT_MM,
+  MAX_PUMP_PALLET_LENGTH_MM,
 } from '@/lib/constants';
-import { packPallets } from '@/lib/engine/floorPlan';
 
-// ─── STEP 1: Resolve wood weight for a pallet ────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function isMotor(item: OrderItem): boolean {
+  return item.productType === 'motor-V4' || item.productType === 'motor-V6';
+}
+
+function isPump(item: OrderItem): boolean {
+  return item.productType === 'pump';
+}
+
+// ─── STEP 1: Resolve pallet width for an item ────────────────────────────────
+export function resolvePalletWidth(item: OrderItem): number {
+  if (item.productType === 'motor-V4') return MOTOR_PALLET_WIDTH['V4'];
+  if (item.productType === 'motor-V6') return MOTOR_PALLET_WIDTH['V6'];
+  if (item.productType === 'controller' || item.productType === 'spare') {
+    console.warn('Controller/spare pallet width defaulting to 715mm — confirm with Mahendra');
+    return 715;
+  }
+  const width = PUMP_PALLET_WIDTH[item.palletFamily];
+  if (!width) throw new Error(`Unknown pallet family: ${item.palletFamily}`);
+  return width;
+}
+
+// ─── STEP 2: Resolve wood weight for a pallet ────────────────────────────────
 export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number {
-  if (item.productType.startsWith('motor-')) {
+  if (isMotor(item)) {
     return isMixedSku ? WOOD_WEIGHT.MOTOR_MIXED_SKU : WOOD_WEIGHT.MOTOR_SINGLE_SKU;
   }
   const heavyFamilies = ['SK77', 'SK95', 'SK95A', 'SK95B'];
@@ -30,304 +49,363 @@ export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number 
     : WOOD_WEIGHT.PUMP_LIGHT;
 }
 
-// ─── STEP 2: Arrange boxes on a pallet base ──────────────────────────────────
-// How one product line's boxes sit on a full pallet
-export interface PalletLayout {
-  baseName: string;      // Large / Medium / Small, or Long for an over-length box
-  isLongPallet: boolean; // box longer than any standard base
-  baseLengthMm: number;  // pallet_L
-  baseWidthMm: number;   // pallet_W
-  boxAlongMm: number;    // box side running along the pallet length
-  boxAcrossMm: number;   // box side running across the pallet width
-  boxesPerRow: number;   // along the length
-  boxesPerCol: number;   // across the width
-  boxesPerLayer: number;
-  maxLayers: number;
-  boxesPerPallet: number;
+// ─── STEP 3a: Compute motor pallet geometry ──────────────────────────────────
+// Motors stand UPRIGHT on the pallet in vertical layers.
+// 6" CI motors (motor-V4): 4 motors per layer, stacked up to container height
+// 4" CI motors (motor-V6): 2 motors per layer, stacked up to container height
+// Pallet width = motors_per_layer × box_width
+// Pallet height = layers × box_height + pallet_base
+// Pallet length = ceil(qty / motors_per_layer) × box_depth
+//
+// Note: motor-V4 = 6" series (box W=178mm, 4 per layer → 712mm across pallet 770mm)
+//       motor-V6 = 8" series (box W=340mm, 2 per layer → 680mm or as per box dims)
+export function computeMotorPalletGeometry(
+  item: OrderItem,
+  qty: number
+): { lengthMm: number; widthMm: number; heightMm: number; motorsPerLayer: number; layers: number } {
+  const motorsPerLayer = item.productType === 'motor-V4' ? 4 : 2;
+  const palletWidthMm = resolvePalletWidth(item);
+
+  const maxLayers = Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
+  const layers = Math.max(1, Math.min(maxLayers, Math.ceil(qty / motorsPerLayer)));
+
+  const columns = Math.ceil(qty / (motorsPerLayer * layers));
+  const lengthMm = columns * item.boxLengthMm;
+  const heightMm = layers * item.boxHeightMm + PALLET_BASE_HEIGHT_MM;
+
+  return { lengthMm, widthMm: palletWidthMm, heightMm, motorsPerLayer, layers };
 }
 
-// Standard bases are tried Large → Medium → Small; on each the box is tried as
-// entered, then turned 90° on the pallet. A box longer than the Large base gets
-// a long pallet as long as the box. Returns null when the box fits no pallet.
-export function computePalletLayout(item: OrderItem): PalletLayout | null {
-  const maxLayers = Math.floor((MAX_PALLET_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
-  if (maxLayers === 0) return null; // a single box is taller than the pallet limit
+// ─── STEP 3b: Box rotation helper ────────────────────────────────────────────
+// For each pump box, try two orientations and pick the one that minimises the
+// pallet length contribution (i.e. packs more boxes within a given width).
+//
+//   Orientation A (default):  boxes_per_row = floor(palletW / boxW)
+//                             row_length    = boxL
+//   Orientation B (rotated):  boxes_per_row = floor(palletW / boxL)   [swap L and W]
+//                             row_length    = boxW
+//
+// Pick the orientation that gives the shorter total pallet length for this qty.
+// If the box is square (boxL === boxW) the orientations are identical; A is returned.
+export interface SkuOrientation {
+  bpr: number;               // boxes per row in chosen orientation
+  rowLengthMm: number;       // mm along pallet length per row
+  palletLengthContrib: number; // rows x rowLength for this qty
+  rotated: boolean;          // true = orientation B (rotated 90 deg)
+}
 
-  const layout = (
-    baseName: string, baseLengthMm: number, baseWidthMm: number, boxAlongMm: number, boxAcrossMm: number
-  ): PalletLayout => {
-    const boxesPerRow = Math.floor(baseLengthMm / boxAlongMm);
-    const boxesPerCol = Math.floor(baseWidthMm / boxAcrossMm);
-    const boxesPerLayer = boxesPerRow * boxesPerCol;
-    return {
-      baseName, isLongPallet: baseName === 'Long', baseLengthMm, baseWidthMm, boxAlongMm, boxAcrossMm,
-      boxesPerRow, boxesPerCol, boxesPerLayer, maxLayers, boxesPerPallet: boxesPerLayer * maxLayers,
-    };
+export function bestOrientationForSku(
+  item: OrderItem,
+  palletWidthMm: number,
+  qty: number,
+): SkuOrientation {
+  const bprA = Math.max(1, Math.floor(palletWidthMm / item.boxWidthMm));
+  const rowsA = Math.ceil(qty / bprA);
+  const lengthA = rowsA * item.boxLengthMm;
+
+  const fitsB = item.boxLengthMm <= palletWidthMm;
+  const bprB = fitsB ? Math.max(1, Math.floor(palletWidthMm / item.boxLengthMm)) : 0;
+  const rowsB = fitsB ? Math.ceil(qty / bprB) : Infinity;
+  const lengthB = fitsB ? rowsB * item.boxWidthMm : Infinity;
+
+  if (fitsB && lengthB < lengthA) {
+    return { bpr: bprB, rowLengthMm: item.boxWidthMm, palletLengthContrib: lengthB, rotated: true };
+  }
+  return { bpr: bprA, rowLengthMm: item.boxLengthMm, palletLengthContrib: lengthA, rotated: false };
+}
+
+// ─── STEP 3c: Compute pump pallet dimensions for a set of pump boxes ─────────
+export function computePumpPalletDimensions(
+  skus: Array<{ item: OrderItem; qty: number }>,
+  palletWidthMm: number
+): { lengthMm: number; widthMm: number; heightMm: number } {
+  let totalLengthMm = 0;
+  let maxHeightMm = 0;
+
+  for (const { item, qty } of skus) {
+    const orient = bestOrientationForSku(item, palletWidthMm, qty);
+    totalLengthMm += orient.palletLengthContrib;
+    maxHeightMm = Math.max(maxHeightMm, item.boxHeightMm);
+  }
+
+  return {
+    lengthMm: totalLengthMm,
+    widthMm: palletWidthMm,
+    heightMm: maxHeightMm + PALLET_BASE_HEIGHT_MM,
   };
+}
 
-  const { boxLengthMm: L, boxWidthMm: W } = item;
-  for (const base of STANDARD_PALLETS) {
-    for (const [along, across] of [[L, W], [W, L]]) {
-      const fit = layout(base.name, base.lengthMm, base.widthMm, along, across);
-      if (fit.boxesPerPallet > 0) return fit;
+// ─── STEP 4: Consolidation key ───────────────────────────────────────────────
+function consolidationKey(item: OrderItem): string {
+  const palletWidthMm = resolvePalletWidth(item);
+  const customer = (item as OrderItem & { customer?: string }).customer ?? 'default';
+  const category = isMotor(item) ? `motor-${item.productType}` : 'pump';
+  return `${customer}::${category}::w${palletWidthMm}`;
+}
+
+// ─── STEP 5: Build pump pallets ───────────────────────────────────────────────
+function buildPumpPallets(
+  items: OrderItem[],
+  palletCounter: { value: number }
+): PalletPlan[] {
+  const pallets: PalletPlan[] = [];
+  const sorted = [...items].sort((a, b) => b.quantity - a.quantity);
+  const remaining = new Map<string, number>(
+    sorted.map(item => [item.productCode, item.quantity])
+  );
+
+  while (true) {
+    const allPlaced = [...remaining.values()].every(q => q === 0);
+    if (allPlaced) break;
+
+    let palletGrossKg = 0;
+    const palletSkus: Array<{ item: OrderItem; qty: number }> = [];
+
+    for (const item of sorted) {
+      const rem = remaining.get(item.productCode) ?? 0;
+      if (rem === 0) continue;
+
+      const headroom = MAX_PALLET_GROSS_KG - palletGrossKg;
+      if (headroom <= 0) break;
+
+      const maxQty = Math.floor(headroom / item.grossWeightKg);
+      if (maxQty === 0) continue;
+
+      const qtyThisPallet = Math.min(rem, maxQty);
+      palletSkus.push({ item, qty: qtyThisPallet });
+      palletGrossKg += qtyThisPallet * item.grossWeightKg;
+      remaining.set(item.productCode, rem - qtyThisPallet);
+    }
+
+    if (palletSkus.length === 0) {
+      const heavyItem = sorted.find(item => (remaining.get(item.productCode) ?? 0) > 0);
+      if (!heavyItem) break;
+      palletSkus.push({ item: heavyItem, qty: 1 });
+      remaining.set(heavyItem.productCode, (remaining.get(heavyItem.productCode) ?? 1) - 1);
+      palletGrossKg = heavyItem.grossWeightKg;
+    }
+
+    const palletWidthMm = resolvePalletWidth(palletSkus[0].item);
+    const { lengthMm, widthMm, heightMm } = computePumpPalletDimensions(palletSkus, palletWidthMm);
+    const isMixedSku = palletSkus.length > 1;
+    const woodWeightKg = Math.max(...palletSkus.map(s => resolveWoodWeight(s.item, isMixedSku)));
+    const totalGrossKg = palletGrossKg + woodWeightKg;
+    const totalNetKg = palletSkus.reduce((sum, { item, qty }) => sum + item.netWeightKg * qty, 0);
+    const cbm = (lengthMm * widthMm * heightMm) / 1_000_000_000;
+
+    const palletId = `SK-${String(palletCounter.value).padStart(2, '0')}`;
+    palletCounter.value++;
+
+    pallets.push({
+      palletId,
+      family: palletSkus[0].item.palletFamily,
+      productCode: palletSkus[0].item.productCode,
+      productCodes: palletSkus.map(s => s.item.productCode),
+      quantity: palletSkus.reduce((s, x) => s + x.qty, 0),
+      skuBreakdown: palletSkus.map(s => ({
+        productCode: s.item.productCode,
+        quantity: s.qty,
+        netWeightKg: Math.round(s.item.netWeightKg * s.qty * 10) / 10,
+        grossWeightKg: Math.round(s.item.grossWeightKg * s.qty * 10) / 10,
+      })),
+      lengthMm,
+      widthMm,
+      heightMm,
+      cbm: Math.round(cbm * 1000) / 1000,
+      netWeightKg: Math.round(totalNetKg * 10) / 10,
+      grossWeightKg: Math.round(palletGrossKg * 10) / 10,
+      woodWeightKg,
+      totalGrossKg: Math.round(totalGrossKg * 10) / 10,
+      isMixedSku,
+      customer: (palletSkus[0].item as OrderItem & { customer?: string }).customer,
+    });
+  }
+
+  return pallets;
+}
+
+// ─── STEP 6: Build motor pallets ──────────────────────────────────────────────
+const MAX_MOTORS_PER_PALLET = 24;
+
+function buildMotorPallets(
+  items: OrderItem[],
+  palletCounter: { value: number }
+): PalletPlan[] {
+  const pallets: PalletPlan[] = [];
+  const remaining = new Map<string, number>(
+    items.map(item => [item.productCode, item.quantity])
+  );
+  const sorted = [...items].sort((a, b) => b.quantity - a.quantity);
+
+  while (true) {
+    const allPlaced = [...remaining.values()].every(q => q === 0);
+    if (allPlaced) break;
+
+    let palletMotors = 0;
+    let palletGrossKg = 0;
+    const palletSkus: Array<{ item: OrderItem; qty: number }> = [];
+
+    for (const item of sorted) {
+      const rem = remaining.get(item.productCode) ?? 0;
+      if (rem === 0) continue;
+
+      const countHeadroom = MAX_MOTORS_PER_PALLET - palletMotors;
+      const weightHeadroom = MAX_PALLET_GROSS_KG - palletGrossKg;
+      if (countHeadroom <= 0 || weightHeadroom <= 0) break;
+
+      const maxByCount = countHeadroom;
+      const maxByWeight = Math.floor(weightHeadroom / item.grossWeightKg);
+      const qtyThisPallet = Math.min(rem, maxByCount, maxByWeight);
+      if (qtyThisPallet <= 0) continue;
+
+      palletSkus.push({ item, qty: qtyThisPallet });
+      palletMotors += qtyThisPallet;
+      palletGrossKg += qtyThisPallet * item.grossWeightKg;
+      remaining.set(item.productCode, rem - qtyThisPallet);
+    }
+
+    if (palletSkus.length === 0) {
+      const heavyItem = sorted.find(item => (remaining.get(item.productCode) ?? 0) > 0);
+      if (!heavyItem) break;
+      palletSkus.push({ item: heavyItem, qty: 1 });
+      remaining.set(heavyItem.productCode, (remaining.get(heavyItem.productCode) ?? 1) - 1);
+      palletMotors = 1;
+      palletGrossKg = heavyItem.grossWeightKg;
+    }
+
+    const repItem = palletSkus[0].item;
+    const totalQty = palletSkus.reduce((s, x) => s + x.qty, 0);
+    const { lengthMm, widthMm, heightMm } = computeMotorPalletGeometry(repItem, totalQty);
+
+    const isMixedSku = palletSkus.length > 1;
+    const woodWeightKg = Math.max(...palletSkus.map(s => resolveWoodWeight(s.item, isMixedSku)));
+    const totalGrossKg = palletGrossKg + woodWeightKg;
+    const totalNetKg = palletSkus.reduce((sum, { item, qty }) => sum + item.netWeightKg * qty, 0);
+    const cbm = (lengthMm * widthMm * heightMm) / 1_000_000_000;
+
+    const palletId = `SK-${String(palletCounter.value).padStart(2, '0')}`;
+    palletCounter.value++;
+
+    pallets.push({
+      palletId,
+      family: repItem.palletFamily,
+      productCode: repItem.productCode,
+      productCodes: palletSkus.map(s => s.item.productCode),
+      quantity: totalQty,
+      skuBreakdown: palletSkus.map(s => ({
+        productCode: s.item.productCode,
+        quantity: s.qty,
+        netWeightKg: Math.round(s.item.netWeightKg * s.qty * 10) / 10,
+        grossWeightKg: Math.round(s.item.grossWeightKg * s.qty * 10) / 10,
+      })),
+      lengthMm,
+      widthMm,
+      heightMm,
+      cbm: Math.round(cbm * 1000) / 1000,
+      netWeightKg: Math.round(totalNetKg * 10) / 10,
+      grossWeightKg: Math.round(palletGrossKg * 10) / 10,
+      woodWeightKg,
+      totalGrossKg: Math.round(totalGrossKg * 10) / 10,
+      isMixedSku,
+      customer: (repItem as OrderItem & { customer?: string }).customer,
+    });
+  }
+
+  return pallets;
+}
+
+// ─── STEP 7: Main pallet builder ─────────────────────────────────────────────
+export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
+  const pallets: PalletPlan[] = [];
+  const palletCounter = { value: 1 };
+
+  const groups = new Map<string, OrderItem[]>();
+  for (const item of items) {
+    const key = consolidationKey(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(item);
+  }
+
+  for (const groupItems of groups.values()) {
+    const firstItem = groupItems[0];
+    if (isMotor(firstItem)) {
+      pallets.push(...buildMotorPallets(groupItems, palletCounter));
+    } else if (isPump(firstItem)) {
+      pallets.push(...buildPumpPallets(groupItems, palletCounter));
+    } else {
+      pallets.push(...buildPumpPallets(groupItems, palletCounter));
     }
   }
 
-  // Long pallet: as long as the box, one box per row, still filled across and up
-  const large = STANDARD_PALLETS[0];
-  if (L > large.lengthMm && L <= CONTAINER_LENGTH_MM.FCL_40FT) {
-    const fit = layout('Long', L, large.widthMm, L, W);
-    if (fit.boxesPerPallet > 0) return fit;
-  }
-  return null;
+  return pallets;
 }
 
-// ─── STEP 3: Build pallet plans from all orders' items ───────────────────────
-// Each line's boxes are spread over as many pallets as needed. A pallet is also
-// capped by weight so it never exceeds the forklift limit (MAX_PALLET_GROSS_KG).
-// Lines whose box fits no pallet are left out and reported in warnings.
-export function buildPalletPlans(orders: ShipmentOrder[]): { pallets: PalletPlan[]; warnings: string[] } {
-  const pallets: PalletPlan[] = [];
+const LCL_THRESHOLD_CBM = 15;
+
+// ─── STEP 8: Aggregate + recommend container ─────────────────────────────────
+export function computeShipment(items: OrderItem[]): ShipmentResult {
+  const pallets = buildPalletPlans(items);
   const warnings: string[] = [];
 
-  // Flatten items across orders, keeping each item's owner; numbering runs
-  // across the whole shipment so pallet IDs stay unique
-  const lines = orders.flatMap(order =>
-    order.items.map(item => ({ item, customerName: order.customerName, orderRef: order.orderRef }))
-  );
+  const totalCBM = pallets.reduce((sum, p) => sum + p.cbm, 0);
+  const totalGrossKg = pallets.reduce((sum, p) => sum + p.totalGrossKg, 0);
 
-  lines.forEach(({ item, customerName, orderRef }, itemIndex) => {
-    const palletNumber = String(itemIndex + 1).padStart(2, '0');
-    const layout = computePalletLayout(item);
-    if (!layout) {
-      const box = `${item.boxLengthMm}×${item.boxWidthMm}×${item.boxHeightMm}mm`;
-      warnings.push(
-        `SK-${palletNumber} (${item.productCode}): OVERSIZED — box ${box} fits no pallet. ${item.quantity} box${item.quantity > 1 ? 'es' : ''} left out of this plan; arrange special handling with Mahendra`
-      );
-      return;
-    }
+  const requires40ft = pallets.some((p) => p.lengthMm > CONTAINER_LENGTH_MM.FCL_20FT);
 
-    const isMixedSku = false; // single-item call; mixed handled separately
-    const woodWeightKg = resolveWoodWeight(item, isMixedSku);
-    const boxesByWeight = Math.floor((MAX_PALLET_GROSS_KG - woodWeightKg) / item.grossWeightKg);
-    if (boxesByWeight < 1) {
-      warnings.push(
-        `SK-${palletNumber} (${item.productCode}): one box on its pallet weighs ${item.grossWeightKg + woodWeightKg}kg — over the ${MAX_PALLET_GROSS_KG}kg forklift limit`
-      );
-    }
-    const boxesPerPallet = Math.max(1, Math.min(layout.boxesPerPallet, boxesByWeight));
-
-    let remaining = item.quantity;
-    let splitIndex = 1;
-
-    while (remaining > 0) {
-      const unitsThisPallet = Math.min(remaining, boxesPerPallet);
-      // Fewest layers that hold these boxes, then rows for the fullest layer
-      const layers = Math.ceil(unitsThisPallet / layout.boxesPerLayer);
-      const rows = Math.ceil(Math.ceil(unitsThisPallet / layers) / layout.boxesPerCol);
-      const lengthMm = Math.min(rows * layout.boxAlongMm, layout.baseLengthMm);
-      const widthMm = Math.min(layout.boxesPerCol * layout.boxAcrossMm, layout.baseWidthMm);
-      const heightMm = layers * item.boxHeightMm + PALLET_BASE_HEIGHT_MM;
-
-      const cbm = (lengthMm * widthMm * heightMm) / 1_000_000_000;
-      // Item weights are per box
-      const netWeightKg = item.netWeightKg * unitsThisPallet;
-      const grossWeightKg = item.grossWeightKg * unitsThisPallet;
-      const totalGrossKg = grossWeightKg + woodWeightKg;
-      const palletId = `SK-${palletNumber}${splitIndex > 1 ? `-P${splitIndex}` : ''}`;
-
-      pallets.push({
-        palletId,
-        customerName,
-        orderRef,
-        family: item.palletFamily,
-        productCode: item.productCode,
-        productCodes: [item.productCode], // one SKU per pallet until mixed palletising exists
-        quantity: unitsThisPallet,
-        lengthMm,
-        widthMm,
-        heightMm,
-        cbm: Math.round(cbm * 1000) / 1000,
-        netWeightKg: Math.round(netWeightKg * 10) / 10,
-        grossWeightKg: Math.round(grossWeightKg * 10) / 10,
-        woodWeightKg,
-        totalGrossKg: Math.round(totalGrossKg * 10) / 10,
-        isMixedSku,
-        ...(layout.isLongPallet && { isLongPallet: true }),
-      });
-
-      if (layout.isLongPallet) {
-        warnings.push(
-          `Pallet ${palletId} is ${item.boxLengthMm}mm long — needs flat-bed or special handling, verify with Mahendra`
-        );
-      }
-
-      remaining -= unitsThisPallet;
-      splitIndex++;
-    }
-  });
-
-  return { pallets, warnings };
-}
-
-// ─── STEP 4b: Floor fit + conditional stacking ───────────────────────────────
-// Floor fit uses the same row-fill packing as the floor plan drawing, so the
-// recommendation and the drawing always agree. Stacked pairs take one footprint.
-export function fitsFloor(pallets: PalletPlan[], containerLength: number): boolean {
-  return packPallets(pallets, containerLength).every(p => !p.overflow);
-}
-
-// A pair may be stacked only if ALL rules hold
-function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
-  return (
-    top.widthMm === bottom.widthMm &&                                // same footprint width
-    bottom.heightMm + top.heightMm <= MAX_STACKED_HEIGHT_MM &&       // headroom
-    bottom.totalGrossKg + top.totalGrossKg <= MAX_PALLET_GROSS_KG && // forklift cap
-    bottom.totalGrossKg >= top.totalGrossKg &&                       // heavier on bottom
-    top.lengthMm <= bottom.lengthMm &&                               // no overhang
-    top.customerName === bottom.customerName &&                      // keep consignees apart
-    top.orderRef === bottom.orderRef
-  );
-}
-
-// Stack pallets two-high ONLY as far as needed to fit a floor of targetLength.
-// Greedy, fewest pairs: each round stacks the valid pair that removes the most
-// floor length (the top pallet's footprint), then re-checks the fit and stops
-// as soon as everything fits. Never more than 2 per stack.
-// Returns every physical pallet (same order) with stack fields set on the
-// pairs used. If no stacking can make it fit, the caller should discard it.
-export function stackPallets(pallets: PalletPlan[], targetLength: number): PalletPlan[] {
-  let current = pallets;
-
-  while (!fitsFloor(current, targetLength)) {
-    const free = current.filter(p => !p.isStacked);
-    let best: { bottom: PalletPlan; top: PalletPlan } | null = null;
-
-    for (let i = 0; i < free.length; i++) {
-      for (let j = i + 1; j < free.length; j++) {
-        for (const [bottom, top] of [[free[i], free[j]], [free[j], free[i]]]) {
-          if (!canStack(bottom, top)) continue;
-          if (!best || top.lengthMm > best.top.lengthMm) best = { bottom, top };
-        }
-      }
-    }
-    if (!best) break; // no valid pair left
-
-    const { bottom, top } = best;
-    current = current.map(p =>
-      p === bottom ? { ...p, isStacked: true, stackedWith: top.palletId, stackPosition: 'bottom' as const }
-      : p === top ? { ...p, isStacked: true, stackedWith: bottom.palletId, stackPosition: 'top' as const }
-      : p
-    );
-  }
-
-  return current;
-}
-
-// ─── Per-order totals, in the order the orders were given ────────────────────
-// Orders are matched by customerName + orderRef, so two orders from the same
-// customer get separate rows; orders with identical name and ref are merged.
-function summariseByOrder(orders: ShipmentOrder[], pallets: PalletPlan[]): CustomerSummary[] {
-  const key = (customerName: string, orderRef: string) => `${customerName}\u0000${orderRef}`;
-  const summaries = new Map<string, CustomerSummary>();
-
-  for (const { customerName, orderRef } of orders) {
-    if (!summaries.has(key(customerName, orderRef))) {
-      summaries.set(key(customerName, orderRef), { customerName, orderRef, totalCBM: 0, totalGrossKg: 0, palletCount: 0 });
-    }
-  }
-  for (const p of pallets) {
-    const s = summaries.get(key(p.customerName, p.orderRef))!;
-    s.totalCBM += p.cbm;
-    s.totalGrossKg += p.totalGrossKg;
-    s.palletCount += 1;
-  }
-
-  return Array.from(summaries.values()).map(s => ({
-    ...s,
-    totalCBM: Math.round(s.totalCBM * 1000) / 1000,
-    totalGrossKg: Math.round(s.totalGrossKg * 10) / 10,
-  }));
-}
-
-// ─── STEP 5: Aggregate + recommend container ─────────────────────────────────
-export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
-  // Pallets start unstacked; stacking is applied below only if it is the
-  // difference between fitting a container floor or not
-  const { pallets: built, warnings } = buildPalletPlans(orders);
-  let pallets = built;
-
-  // Stacking never changes these totals
-  const totalCBM = built.reduce((sum, p) => sum + p.cbm, 0);
-  const totalGrossKg = built.reduce((sum, p) => sum + p.totalGrossKg, 0);
-
-  // Validate each pallet
   pallets.forEach((p) => {
     if (p.heightMm > MAX_STACK_HEIGHT_MM) {
-      warnings.push(`${p.palletId}: height ${p.heightMm}mm exceeds max stack height ${MAX_STACK_HEIGHT_MM}mm`);
+      warnings.push(
+        `${p.palletId}: height ${p.heightMm}mm exceeds max stack height ${MAX_STACK_HEIGHT_MM}mm — reduce quantity or check stacking`
+      );
     }
     if (p.lengthMm > CONTAINER_LENGTH_MM.FCL_20FT) {
       warnings.push(
-        `${p.palletId}: length ${p.lengthMm}mm exceeds 20ft internal length ${CONTAINER_LENGTH_MM.FCL_20FT}mm — 20ft container not possible`
+        `${p.palletId}: length ${p.lengthMm}mm exceeds 20ft internal length ${CONTAINER_LENGTH_MM.FCL_20FT}mm — requires 40ft container`
+      );
+    }
+    if (p.lengthMm > MAX_PUMP_PALLET_LENGTH_MM) {
+      warnings.push(
+        `${p.palletId}: length ${p.lengthMm}mm exceeds practical pallet limit (${MAX_PUMP_PALLET_LENGTH_MM}mm) — verify container floor-plan arrangement with Mahendra before loading`
+      );
+    }
+    if (p.totalGrossKg > MAX_PALLET_GROSS_KG + (p.woodWeightKg ?? 0)) {
+      warnings.push(
+        `${p.palletId}: gross weight ${p.totalGrossKg}kg — verify forklift rated capacity before loading`
       );
     }
   });
 
-  // Container recommendation.
-  // Each FCL size must pass its CBM/payload band AND fit its floor. Floor fit is
-  // tried unstacked first; stacking is only attempted when that fails.
   let containerRecommendation: ShipmentResult['containerRecommendation'];
-  let containersNeeded: number | undefined;
-
-  const len20 = CONTAINER_LENGTH_MM.FCL_20FT;
-  const len40 = CONTAINER_LENGTH_MM.FCL_40FT;
-  const in20ftBand = totalCBM <= FCL_20FT_BAND_MAX_CBM && totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg;
-  const in40ftBand = totalCBM <= CONTAINERS.FCL_40FT.maxCBM && totalGrossKg <= CONTAINERS.FCL_40FT.maxPayloadKg;
-
-  // Returns stacked pallets if stacking rescues the fit, otherwise null
-  const rescueByStacking = (length: number): PalletPlan[] | null => {
-    const stacked = stackPallets(built, length);
-    return fitsFloor(stacked, length) ? stacked : null;
-  };
-  const stackedNote = (stacked: PalletPlan[], size: string) => {
-    const pairs = stacked.filter(p => p.stackPosition === 'bottom').length;
-    warnings.push(
-      `${pairs} stacked pair${pairs > 1 ? 's' : ''} needed to fit a ${size} — pallets stacked two-high, confirm with Mahendra before loading`
-    );
-  };
-
-  // SLEKA books one full container per customer, so LCL only for a single
-  // small pallet; 2+ pallets always get FCL regardless of volume
-  if (built.length <= 1 && totalCBM < 2.0) {
+  if (totalCBM <= LCL_THRESHOLD_CBM) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for a full container. Consolidation charges will apply.');
-  } else if (in20ftBand && fitsFloor(built, len20)) {
+  } else if (
+    totalCBM <= CONTAINERS.FCL_20FT.maxCBM &&
+    totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg &&
+    !requires40ft
+  ) {
     containerRecommendation = 'FCL_20FT';
-  } else if (in20ftBand && rescueByStacking(len20)) {
-    pallets = rescueByStacking(len20)!;
-    containerRecommendation = 'FCL_20FT';
-    stackedNote(pallets, '20ft');
-  } else if (in40ftBand && fitsFloor(built, len40)) {
+  } else if (
+    totalCBM <= CONTAINERS.FCL_40FT.maxCBM &&
+    totalGrossKg <= CONTAINERS.FCL_40FT.maxPayloadKg
+  ) {
     containerRecommendation = 'FCL_40FT';
-  } else if (in40ftBand && rescueByStacking(len40)) {
-    pallets = rescueByStacking(len40)!;
-    containerRecommendation = 'FCL_40FT';
-    stackedNote(pallets, '40ft');
   } else {
     containerRecommendation = 'MULTI_CONTAINER';
     const containersByVolume = Math.ceil(totalCBM / CONTAINERS.FCL_40FT.maxCBM);
     const containersByWeight = Math.ceil(totalGrossKg / CONTAINERS.FCL_40FT.maxPayloadKg);
-    // Within the 40ft band but the pallets don't fit one 40ft floor even
-    // stacked: floor space is the limit, so at least 2 containers
-    const floorLimited = in40ftBand;
-    containersNeeded = Math.max(containersByVolume, containersByWeight, floorLimited ? 2 : 1);
-    const limitingFactor = floorLimited ? 'floor space' : containersByVolume >= containersByWeight ? 'volume' : 'weight';
+    const containersNeeded = Math.max(containersByVolume, containersByWeight);
+    const limitingFactor = containersByVolume >= containersByWeight ? 'volume' : 'weight';
     warnings.push(
       `Requires approximately ${containersNeeded} × 40ft FCL containers — limited by ${limitingFactor}. Coordinate with freight forwarder for split shipment.`
     );
   }
 
-  // Weight warnings
+  if (requires40ft && containerRecommendation === 'FCL_20FT') {
+    containerRecommendation = 'FCL_40FT';
+    warnings.push('One or more pallets exceed 5,898mm — 20ft container not possible');
+  }
+
   if (containerRecommendation === 'FCL_20FT') {
     const utilisation = totalGrossKg / CONTAINERS.FCL_20FT.maxPayloadKg;
     if (utilisation > 0.9)
@@ -339,20 +417,11 @@ export function computeShipment(orders: ShipmentOrder[]): ShipmentResult {
       warnings.push(`40ft payload at ${(utilisation * 100).toFixed(0)}% — approaching limit`);
   }
 
-  // Pallet positions on the recommended container's floor, saved with the
-  // result so a reloaded calculation draws exactly this plan
-  const placed = containerRecommendation === 'LCL'
-    ? []
-    : packPallets(pallets, containerRecommendation === 'FCL_20FT' ? len20 : len40);
-
   return {
     pallets,
-    placed,
-    perCustomer: summariseByOrder(orders, pallets),
     totalCBM: Math.round(totalCBM * 1000) / 1000,
     totalGrossKg: Math.round(totalGrossKg * 10) / 10,
     containerRecommendation,
-    ...(containersNeeded !== undefined && { containersNeeded }),
     warnings,
   };
 }

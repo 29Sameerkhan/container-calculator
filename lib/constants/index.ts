@@ -14,10 +14,12 @@ export const PUMP_PALLET_WIDTH: Record<string, number> = {
   'SK05': 515, 'SK09-small': 515,
 };
 
-// Motor pallet width by voltage series
+// Motor pallet width by series
+// V4 = 6" CI motors (narrower pallet): 770mm — verified from SK-02 packing list pallet W=770
+// V6 = 8" CI motors (wider pallet):   1020mm — verified from SK-03 packing list pallet W=1020
 export const MOTOR_PALLET_WIDTH: Record<string, number> = {
-  'V4': 1120,
-  'V6': 715,
+  'V4': 770,
+  'V6': 1020,
 };
 
 // Wood weight constants (kg)
@@ -29,34 +31,14 @@ export const WOOD_WEIGHT = {
   BOX_ACCESSORY: 10,
 };
 
-// Max gross weight per pallet (kg) — safe working load for a standard 2-tonne counterbalance forklift.
-// 1,500 kg is conservative: accounts for height-lift penalties and off-centre load factors.
-// Increase to 2,000 if your facility uses a heavier-rated forklift.
-export const MAX_PALLET_GROSS_KG = 1500;
-
-// Max combined height (mm) of two pallets stacked in the warehouse before loading —
-// leaves headroom under the container roof for the forklift
-export const MAX_STACKED_HEIGHT_MM = 2200;
-
 // Max stacking height inside container (mm)
 export const MAX_STACK_HEIGHT_MM = 2350;
 
-// Standard pallet bases (mm), tried largest first when building pallets
-export const STANDARD_PALLETS = [
-  { name: 'Large',  lengthMm: 1200, widthMm: 1000 },
-  { name: 'Medium', lengthMm: 1200, widthMm: 800 },
-  { name: 'Small',  lengthMm: 1000, widthMm: 800 },
-] as const;
-
-// Max height of one built pallet: boxes + wooden board (mm)
-export const MAX_PALLET_HEIGHT_MM = 2200;
-
-// Wooden pallet board thickness (mm), added under the stacked boxes
-export const PALLET_BASE_HEIGHT_MM = 150;
-
-// Recommendation bands (see computeShipment):
-// 1 pallet under 2 m³ → LCL; otherwise ≤ FCL_20FT_BAND_MAX_CBM → 20ft, ≤ 40ft maxCBM → 40ft, above → multiple containers
-export const FCL_20FT_BAND_MAX_CBM = 25;
+// Wooden pallet base height (mm), added on top of stacked box height
+export const PALLET_BASE_HEIGHT_MM = 120;
 
 // Container internal lengths (mm)
 export const CONTAINER_LENGTH_MM = { FCL_20FT: 5898, FCL_40FT: 11998 };
+
+// Max gross weight per pallet (kg) — safe working load for a standard 2-tonne counterbalance forklift.
+// 1,500 kg is conservative: accounts for height-lift penalties and off-centre load
