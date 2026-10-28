@@ -1,6 +1,6 @@
 export interface OrderItem {
   productCode: string;
-  productType: 'pump' | 'motor-V4' | 'motor-V6' | 'controller' | 'spare';
+  productType: 'pump' | 'motor-V4' | 'motor-V6' | 'motor-V8' | 'controller' | 'spare';
   palletFamily: string;
   quantity: number;
   boxLengthMm: number;

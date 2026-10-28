@@ -21,7 +21,7 @@ import { packPallets } from '@/lib/engine/floorPlan';
 
 // ─── STEP 1: Resolve wood weight for a pallet ────────────────────────────────
 export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number {
-  if (item.productType === 'motor-V4' || item.productType === 'motor-V6') {
+  if (item.productType.startsWith('motor-')) {
     return isMixedSku ? WOOD_WEIGHT.MOTOR_MIXED_SKU : WOOD_WEIGHT.MOTOR_SINGLE_SKU;
   }
   const heavyFamilies = ['SK77', 'SK95', 'SK95A', 'SK95B'];

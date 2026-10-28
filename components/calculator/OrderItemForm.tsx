@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
 import { calcPumpBox, isValidStages, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
+import { calcMotorBox, parseMotorCode } from '@/lib/engine/motorData';
 import { Trash2, Plus } from 'lucide-react';
 
 interface Props {
@@ -19,6 +20,7 @@ const PRODUCT_TYPES = [
   { value: 'pump', label: 'Pump' },
   { value: 'motor-V4', label: 'Motor V4 (3–7.5HP)' },
   { value: 'motor-V6', label: 'Motor V6 (≥10HP)' },
+  { value: 'motor-V8', label: 'Motor V8' },
   { value: 'controller', label: 'Controller' },
   { value: 'spare', label: 'Spare Part' },
 ] as const;
@@ -27,6 +29,7 @@ const PRODUCT_TYPES = [
 function getFamilyOptions(productType: OrderItem['productType']): string[] {
   if (productType === 'motor-V4') return ['SM-V4'];
   if (productType === 'motor-V6') return ['SM-V6'];
+  if (productType === 'motor-V8') return ['SM-V8'];
   if (productType === 'controller') return ['controller'];
   if (productType === 'spare') return ['spare'];
   return Object.keys(PUMP_PALLET_WIDTH);
@@ -86,10 +89,39 @@ function applyStages(row: OrderItem): OrderItem {
 // Pump families whose stage count can be read from the item code
 const PARSE_FAMILIES = ['SK09', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B'];
 
-// Pump item codes start with family then stages, e.g. SK17-07-NK6X6-25BC-1N32-2.
-// Fills Family and Stages (and so the box) from the code. Returns null, leaving
-// the row as it is, unless the line is a pump and both parts are valid.
+// Fills the line from its item code: a motor code (SM-…) or a pump code (SK…).
+// Returns null, leaving the row as it is, when the code isn't recognised.
 function parseItemCode(row: OrderItem): OrderItem | null {
+  return parseMotorItem(row) ?? parsePumpItem(row);
+}
+
+// Motor codes give material, HP and size, e.g. SM-C-I-10-V4-50. Sets the motor
+// type for that size, and box + weights from the motor table (null when that
+// motor isn't in the table yet). Works from any type, so the coordinator can
+// paste a motor code without changing Type first.
+function parseMotorItem(row: OrderItem): OrderItem | null {
+  const motor = parseMotorCode(row.productCode);
+  if (!motor) return null;
+  const box = calcMotorBox(motor.material, motor.size, motor.hp);
+  if (!box) return null;
+  const productType = `motor-${motor.size}` as const;
+  return {
+    ...row,
+    productType,
+    palletFamily: getFamilyOptions(productType)[0],
+    stages: undefined,
+    boxLengthMm: box.L,
+    boxWidthMm: box.W,
+    boxHeightMm: box.H,
+    netWeightKg: box.netKg,
+    grossWeightKg: box.grossKg,
+  };
+}
+
+// Pump item codes start with family then stages, e.g. SK17-07-NK6X6-25BC-1N32-2.
+// Fills Family and Stages (and so the box) from the code. Returns null unless
+// the line is a pump and both parts are valid.
+function parsePumpItem(row: OrderItem): OrderItem | null {
   if (row.productType !== 'pump') return null;
   const [familyPart = '', stagesPart = ''] = row.productCode.trim().split('-');
   const series = familyPart.toUpperCase();
@@ -188,7 +220,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     const parsed = pasted ? parseItemCode(row) : null;
     if (parsed) codeOnFocus.current = code; // already parsed; don't redo on blur
     commitRows(rows.map((r, i) => (i === index ? parsed ?? row : r)));
-    if (parsed) flashAutoFilled(index, true);
+    if (parsed) flashAutoFilled(index, parsed.stages !== undefined);
   }
 
   function blurProductCode(index: number) {
@@ -196,7 +228,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     const parsed = parseItemCode(rows[index]);
     if (!parsed) return;
     commitRows(rows.map((r, i) => (i === index ? parsed : r)));
-    flashAutoFilled(index, true);
+    flashAutoFilled(index, parsed.stages !== undefined);
   }
 
   // Focus a row's Product Code field. A just-added row isn't in the DOM yet, so
