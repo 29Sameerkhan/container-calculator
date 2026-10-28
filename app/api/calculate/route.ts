@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { computeShipment } from '@/lib/engine/palletEngine';
-import { MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
-import { OrderItem, ShipmentOrder } from '@/lib/types';
+import { OrderItem } from '@/lib/types';
 import { z } from 'zod';
 
 const OrderItemSchema = z.object({
   productCode: z.string().min(1),
-  productType: z.enum(['pump', 'motor-V4', 'motor-V6', 'motor-V8', 'controller', 'spare']),
+  productType: z.enum(['pump', 'motor-V4', 'motor-V6', 'controller', 'spare']),
   palletFamily: z.string().min(1),
   quantity: z.number().int().min(1),
   boxLengthMm: z.number().min(1),
@@ -14,26 +13,14 @@ const OrderItemSchema = z.object({
   boxHeightMm: z.number().min(1),
   netWeightKg: z.number().min(0),
   grossWeightKg: z.number().min(0.01),
-  stages: z.number().int().min(MIN_STAGES).max(MAX_STAGES).optional(),
   customer: z.string().optional(),
   weightManualEntry: z.boolean().optional(),
 });
 
-const ShipmentOrderSchema = z.object({
-  customerName: z.string().default(''),
-  orderRef: z.string().default(''),
-  items: z.array(OrderItemSchema).min(1),
-});
-
-// Accepts either a multi-order shipment { orders } or the legacy single order
-// { items, customerName, orderRef }. If both are sent, orders wins.
 const RequestSchema = z.object({
-  orders: z.array(ShipmentOrderSchema).min(1).optional(),
-  items: z.array(OrderItemSchema).min(1).optional(),
+  items: z.array(OrderItemSchema).min(1),
   customerName: z.string().optional(),
   orderRef: z.string().optional(),
-}).refine(body => body.orders !== undefined || body.items !== undefined, {
-  message: 'Provide either orders (multi-order) or items (single order)',
 });
 
 export async function POST(req: NextRequest) {
@@ -48,19 +35,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { orders, items, customerName, orderRef } = parsed.data;
-    const isMultiOrder = orders !== undefined;
-    const shipmentOrders: ShipmentOrder[] = isMultiOrder
-      ? orders
-      : [{ customerName: customerName ?? '', orderRef: orderRef ?? '', items: items as OrderItem[] }];
-
-    const result = computeShipment(shipmentOrders);
+    const result = computeShipment(parsed.data.items as OrderItem[]);
 
     return NextResponse.json({
       success: true,
-      // Single-order header fields; null for a multi-order shipment (see result.perCustomer)
-      customerName: isMultiOrder ? null : customerName ?? null,
-      orderRef: isMultiOrder ? null : orderRef ?? null,
+      customerName: parsed.data.customerName ?? null,
+      orderRef: parsed.data.orderRef ?? null,
       calculatedAt: new Date().toISOString(),
       result,
     });
