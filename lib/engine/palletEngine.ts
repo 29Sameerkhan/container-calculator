@@ -320,7 +320,17 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
   const palletCounter = { value: 1 };
   const groups = new Map<string, OrderItem[]>();
 
+  // A product code entered on several lines is one line with the summed
+  // quantity (other fields from its first line); kept apart per customer
+  const merged = new Map<string, OrderItem>();
   for (const item of items) {
+    const key = `${item.customer ?? 'default'}::${item.productCode}`;
+    const existing = merged.get(key);
+    if (existing) existing.quantity += item.quantity;
+    else merged.set(key, { ...item });
+  }
+
+  for (const item of Array.from(merged.values())) {
     const key = consolidationKey(item);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(item);
