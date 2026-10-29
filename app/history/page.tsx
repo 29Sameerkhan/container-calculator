@@ -32,6 +32,7 @@ const CONTAINER_LABEL: Record<string, string> = {
 
 const EDIT_BUTTON: CSSProperties = { color: '#1E4D8C', background: '#eff6ff', borderColor: '#bfdbfe' };
 const COPY_BUTTON: CSSProperties = { color: '#065f46', background: '#ecfdf5', borderColor: '#a7f3d0' };
+const EXPORT_BUTTON: CSSProperties = { color: '#6d28d9', background: '#f5f3ff', borderColor: '#ddd6fe' };
 const DELETE_BUTTON: CSSProperties = { color: '#dc2626', background: '#fef2f2', borderColor: '#fecaca' };
 
 export default function HistoryPage() {
@@ -207,6 +208,14 @@ export default function HistoryPage() {
                             style={COPY_BUTTON}
                           >
                             📋 Copy
+                          </button>
+                          <button
+                            onClick={e => { e.stopPropagation(); router.push(`/history/${row.id}?export=1`); }}
+                            className="text-xs font-medium rounded-lg border px-2.5 py-1 whitespace-nowrap hover:opacity-80 transition-opacity"
+                            style={EXPORT_BUTTON}
+                            title="Open this plan and download it as PDF"
+                          >
+                            📄 Export
                           </button>
                           <button
                             onClick={e => { e.stopPropagation(); setDeleteError(null); setDeleteId(row.id); }}

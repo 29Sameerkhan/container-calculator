@@ -9,6 +9,7 @@ import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
+import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
 
 // One order card on the dashboard. `items` are the rows its form starts with
 // (empty for a new order, or loaded from a saved calculation); live edits are
@@ -35,6 +36,36 @@ function isOrderList(value: unknown): value is ShipmentOrder[] {
   return Array.isArray(value) && value.length > 0 && Array.isArray((value[0] as ShipmentOrder)?.items);
 }
 
+// Single order: saved exactly as before. Multi-order: names joined for the
+// history list, and the full order list kept in items so it can be reloaded.
+function saveBody(calculatedOrders: ShipmentOrder[], result: ShipmentResult) {
+  return calculatedOrders.length === 1
+    ? {
+        customerName: calculatedOrders[0].customerName,
+        orderRef: calculatedOrders[0].orderRef,
+        items: calculatedOrders[0].items,
+        result,
+      }
+    : {
+        customerName: calculatedOrders.map(o => o.customerName).filter(Boolean).join(' + '),
+        orderRef: calculatedOrders.map(o => o.orderRef).filter(Boolean).join(', '),
+        items: calculatedOrders,
+        result,
+      };
+}
+
+// Always saves a new record, even when working from an edited calculation
+async function saveCalculation(calculatedOrders: ShipmentOrder[], result: ShipmentResult): Promise<number> {
+  const res = await fetch('/api/save-calculation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(saveBody(calculatedOrders, result)),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Save failed');
+  return data.id;
+}
+
 const INPUT_CLASS =
   'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
 
@@ -59,7 +90,11 @@ function DashboardInner() {
   const [result, setResult] = useState<ShipmentResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Every calculation is saved to history automatically; Save downloads the PDF
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'done' | 'error'>('idle');
+  // The results block the PDF is captured from
+  const planRef = useRef<HTMLDivElement>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   // Orders the current result was calculated from — what Save stores
   const [calculatedOrders, setCalculatedOrders] = useState<ShipmentOrder[]>([]);
@@ -136,8 +171,20 @@ function DashboardInner() {
     setOrders(prev => prev.filter(o => o.id !== orderId));
   }
 
+  async function autoSave(submitOrders: ShipmentOrder[], calculated: ShipmentResult) {
+    setSaveStatus('saving');
+    try {
+      setSavedId(await saveCalculation(submitOrders, calculated));
+      setSaveStatus('saved');
+    } catch (e) {
+      console.error(e);
+      setSaveStatus('error');
+    }
+  }
+
   async function handleCalculate() {
     setSaveStatus('idle');
+    setPdfStatus('idle');
     setSavedId(null);
     const submitOrders: ShipmentOrder[] = orders.map(o => ({
       customerName: o.customerName,
@@ -168,6 +215,7 @@ function DashboardInner() {
       if (!res.ok) throw new Error(data.message || data.error || 'Calculation failed');
       setResult(data.result);
       setCalculatedOrders(submitOrders);
+      void autoSave(submitOrders, data.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
@@ -182,47 +230,39 @@ function DashboardInner() {
     setResult(null);
     setError(null);
     setSaveStatus('idle');
+    setPdfStatus('idle');
     setSavedId(null);
     setEditBanner(null);
     setBannerMode(null);
     router.replace('/dashboard');
   }
 
+  // The calculation is already in history (auto-saved); this retries the save
+  // if that failed, then downloads the plan on screen as a PDF
   async function handleSave() {
-    if (!result || calculatedOrders.length === 0) return;
-    setSaveStatus('saving');
+    if (!result || calculatedOrders.length === 0 || !planRef.current) return;
+    let id = savedId;
+    if (saveStatus !== 'saved') {
+      setSaveStatus('saving');
+      try {
+        id = await saveCalculation(calculatedOrders, result);
+        setSavedId(id);
+        setSaveStatus('saved');
+      } catch (e) {
+        console.error(e);
+        setSaveStatus('error');
+        return;
+      }
+    }
+    setPdfStatus('exporting');
     try {
-      // Single order: saved exactly as before. Multi-order: names joined for the
-      // history list, and the full order list kept in items so it can be reloaded.
-      const single = calculatedOrders.length === 1;
-      const body = single
-        ? {
-            customerName: calculatedOrders[0].customerName,
-            orderRef: calculatedOrders[0].orderRef,
-            items: calculatedOrders[0].items,
-            result,
-          }
-        : {
-            customerName: calculatedOrders.map(o => o.customerName).filter(Boolean).join(' + '),
-            orderRef: calculatedOrders.map(o => o.orderRef).filter(Boolean).join(', '),
-            items: calculatedOrders,
-            result,
-          };
-      // Always saves a new record, even when working from an edited calculation
-      const res = await fetch('/api/save-calculation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Save failed');
-      setSavedId(data.id);
-      setSaveStatus('saved');
+      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName));
+      setPdfStatus('done');
       // Clear the form for the next calculation once the confirmation has been seen
       resetTimer.current = setTimeout(handleReset, 2000);
     } catch (e) {
       console.error(e);
-      setSaveStatus('error');
+      setPdfStatus('error');
     }
   }
 
@@ -376,7 +416,7 @@ function DashboardInner() {
 
         {/* Results */}
         {result && (
-          <div className="space-y-4">
+          <div ref={planRef} className="space-y-4">
             <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
             <ContainerFloorPlan
               pallets={result.pallets}
@@ -391,20 +431,25 @@ function DashboardInner() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleSave}
-              disabled={saveStatus === 'saving' || saveStatus === 'saved'}
+              disabled={saveStatus === 'saving' || pdfStatus === 'exporting' || pdfStatus === 'done'}
               className="bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-colors"
             >
               {saveStatus === 'saving'
                 ? 'Saving…'
-                : saveStatus === 'saved'
-                  ? '✓ Saved'
-                  : '💾 Save Calculation'}
+                : pdfStatus === 'exporting'
+                  ? 'Creating PDF…'
+                  : pdfStatus === 'done'
+                    ? '✓ PDF downloaded'
+                    : '💾 Save Calculation & Download PDF'}
             </button>
             {saveStatus === 'saved' && savedId && (
-              <p className="text-sm text-green-700">Saved as #{savedId}</p>
+              <p className="text-sm text-green-700">Saved to history as #{savedId}</p>
             )}
             {saveStatus === 'error' && (
-              <p className="text-sm text-red-600">Save failed — check console</p>
+              <p className="text-sm text-red-600">Auto-save to history failed — click Save to retry</p>
+            )}
+            {pdfStatus === 'error' && (
+              <p className="text-sm text-red-600">PDF export failed — check console</p>
             )}
           </div>
         )}

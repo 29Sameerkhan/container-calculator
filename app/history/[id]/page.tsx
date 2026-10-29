@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { formatSavedAt } from '@/lib/format';
+import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
 import { ShipmentResult } from '@/lib/types';
 
 interface SavedCalculation {
@@ -17,12 +18,48 @@ interface SavedCalculation {
   createdAt: string;
 }
 
+// useSearchParams needs a Suspense boundary in the App Router
 export default function CalculationDetailPage() {
+  return (
+    <Suspense fallback={null}>
+      <CalculationDetail />
+    </Suspense>
+  );
+}
+
+function CalculationDetail() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  // ?export=1 (the Export button in the history list) downloads the PDF on load
+  const exportOnLoad = useSearchParams().get('export') === '1';
   const [calc, setCalc] = useState<SavedCalculation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'error'>('idle');
+  // The order details, summary, floor plan and pallet table the PDF is captured from
+  const planRef = useRef<HTMLDivElement>(null);
+  const exported = useRef(false);
+
+  async function handleExport() {
+    if (!calc || !planRef.current) return;
+    setPdfStatus('exporting');
+    try {
+      await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName));
+      setPdfStatus('idle');
+    } catch (e) {
+      console.error(e);
+      setPdfStatus('error');
+    }
+  }
+
+  useEffect(() => {
+    if (!exportOnLoad || !calc || exported.current) return;
+    exported.current = true;
+    // Let the floor plan finish drawing before it is captured
+    const timer = setTimeout(handleExport, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportOnLoad, calc]);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,12 +96,23 @@ export default function CalculationDetailPage() {
           </h1>
           <p className="text-sm text-blue-200 mt-0.5">SLEKA Industries · Export Operations</p>
         </div>
-        <Link
-          href="/history"
-          className="text-sm text-white border border-white/40 hover:bg-white/10 rounded-md px-3 py-1.5 transition-colors font-medium"
-        >
-          ← History
-        </Link>
+        <div className="flex items-center gap-3">
+          {calc && (
+            <button
+              onClick={handleExport}
+              disabled={pdfStatus === 'exporting'}
+              className="text-sm text-white border border-white/40 hover:bg-white/10 disabled:opacity-60 rounded-md px-3 py-1.5 transition-colors font-medium"
+            >
+              {pdfStatus === 'exporting' ? 'Creating PDF…' : pdfStatus === 'error' ? 'PDF failed — retry' : '📄 Export PDF'}
+            </button>
+          )}
+          <Link
+            href="/history"
+            className="text-sm text-white border border-white/40 hover:bg-white/10 rounded-md px-3 py-1.5 transition-colors font-medium"
+          >
+            ← History
+          </Link>
+        </div>
       </div>
 
       <div className="flex-1 w-full max-w-6xl mx-auto px-6 py-8 space-y-6">
@@ -88,7 +136,7 @@ export default function CalculationDetailPage() {
         )}
 
         {!loading && !error && calc && (
-          <>
+          <div ref={planRef} className="space-y-6">
             {/* Order details */}
             <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -128,7 +176,7 @@ export default function CalculationDetailPage() {
               placed={calc.result.placed}
             />
             <PalletPlanTable pallets={calc.result.pallets} />
-          </>
+          </div>
         )}
       </div>
 
