@@ -86,19 +86,23 @@ export function computePumpPalletDimensions(
   skus: Array<{ item: OrderItem; qty: number }>,
   palletWidthMm: number
 ): { lengthMm: number; widthMm: number; heightMm: number } {
-  // Boxes stack in layers up to the stack height, so each SKU only needs
-  // floor length for one column of layers, not for every box
-  const maxBoxHeightMm = Math.max(...skus.map(s => s.item.boxHeightMm));
-  const maxLayers = Math.max(1, Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / maxBoxHeightMm));
+  // Each SKU is one row of boxes across the pallet, stacked only as many
+  // layers as its boxes need. Extra rows only if that would pass the stack height.
   let totalLengthMm = 0;
+  let maxHeightMm = 0;
   for (const { item, qty } of skus) {
-    const orient = bestOrientationForSku(item, palletWidthMm, Math.ceil(qty / maxLayers));
-    totalLengthMm += orient.palletLengthContrib;
+    const orient = bestOrientationForSku(item, palletWidthMm, qty);
+    const maxLayers = Math.max(1, Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm));
+    const layersNeeded = Math.min(maxLayers, Math.ceil(qty / orient.bpr));
+    const rows = Math.ceil(qty / (orient.bpr * layersNeeded));
+    totalLengthMm += rows * orient.rowLengthMm;
+    const skuHeightMm = layersNeeded * item.boxHeightMm + PALLET_BASE_HEIGHT_MM;
+    maxHeightMm = Math.max(maxHeightMm, skuHeightMm);
   }
   return {
     lengthMm: totalLengthMm,
     widthMm: palletWidthMm,
-    heightMm: maxLayers * maxBoxHeightMm + PALLET_BASE_HEIGHT_MM,
+    heightMm: maxHeightMm,
   };
 }
 
