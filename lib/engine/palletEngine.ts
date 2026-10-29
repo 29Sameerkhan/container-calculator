@@ -86,15 +86,35 @@ export function bestOrientationForSku(
   return { bpr: bprA, rowLengthMm: item.boxLengthMm, palletLengthContrib: lengthA, rotated: false };
 }
 
+// Pump stage boxes are long tubes with a square face (e.g. 1354×152×152)
+export function isSquareTubeBox(item: OrderItem): boolean {
+  return item.boxWidthMm === item.boxHeightMm;
+}
+
 export function computePumpPalletDimensions(
   skus: Array<{ item: OrderItem; qty: number }>,
   palletWidthMm: number
 ): { lengthMm: number; widthMm: number; heightMm: number } {
-  // Each SKU is one row of boxes across the pallet, stacked only as many
-  // layers as its boxes need. Extra rows only if that would pass the stack height.
   let totalLengthMm = 0;
   let maxHeightMm = 0;
-  for (const { item, qty } of skus) {
+
+  // Square tubes (pump stage boxes) of every length share one block, like
+  // motors: as many across as fit, stacked in layers, as long as the longest
+  const tubes = skus.filter(s => isSquareTubeBox(s.item));
+  if (tubes.length > 0) {
+    const tubeFaceMm = Math.max(...tubes.map(s => s.item.boxWidthMm));
+    const tubeCount = tubes.reduce((sum, s) => sum + s.qty, 0);
+    const bpr = Math.max(1, Math.floor(palletWidthMm / tubeFaceMm));
+    const maxLayers = Math.max(1, Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / tubeFaceMm));
+    const layersNeeded = Math.min(maxLayers, Math.ceil(tubeCount / bpr));
+    const rows = Math.ceil(tubeCount / (bpr * layersNeeded));
+    totalLengthMm += rows * Math.max(...tubes.map(s => s.item.boxLengthMm));
+    maxHeightMm = layersNeeded * tubeFaceMm + PALLET_BASE_HEIGHT_MM;
+  }
+
+  // Other boxes: each SKU is one row of boxes across the pallet, stacked only as
+  // many layers as its boxes need. Extra rows only if that would pass the stack height.
+  for (const { item, qty } of skus.filter(s => !isSquareTubeBox(s.item))) {
     const orient = bestOrientationForSku(item, palletWidthMm, qty);
     const maxLayers = Math.max(1, Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm));
     const layersNeeded = Math.min(maxLayers, Math.ceil(qty / orient.bpr));
