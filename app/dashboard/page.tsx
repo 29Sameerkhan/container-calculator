@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { X } from 'lucide-react';
-import OrderItemForm, { isComplete } from '@/components/calculator/OrderItemForm';
+import OrderItemForm, { isComplete, codeWarning } from '@/components/calculator/OrderItemForm';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
@@ -91,6 +91,8 @@ function DashboardInner() {
   const [result, setResult] = useState<ShipmentResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Lines with a product code that weren't sent because they're incomplete
+  const [skipped, setSkipped] = useState<string[]>([]);
   // Every calculation is saved to history automatically; Save downloads the PDF
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'done' | 'error'>('idle');
@@ -193,6 +195,9 @@ function DashboardInner() {
       items: liveRows(o).filter(row => isComplete(row)),
     }));
     console.log('[calculate] orders being sent:', submitOrders);
+    setSkipped(orders.flatMap(o => liveRows(o)
+      .filter(row => row.productCode.trim() && !isComplete(row))
+      .map(row => `${row.productCode.trim()} — ${codeWarning(row) ?? 'box size, quantity or gross weight missing'}`)));
 
     const emptyIndex = submitOrders.findIndex(o => o.items.length === 0);
     if (emptyIndex !== -1) {
@@ -230,6 +235,7 @@ function DashboardInner() {
     setCalculatedOrders([]);
     setResult(null);
     setError(null);
+    setSkipped([]);
     setSaveStatus('idle');
     setPdfStatus('idle');
     setSavedId(null);
@@ -408,6 +414,16 @@ function DashboardInner() {
                     ? `Calculate Container (${orders.length} orders, ${totalLines} line${totalLines === 1 ? '' : 's'} total)`
                     : `Calculate Container (${totalLines} line${totalLines > 1 ? 's' : ''})`}
               </button>
+            )}
+            {skipped.length > 0 && (
+              <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <p className="font-medium">
+                  {skipped.length} line{skipped.length > 1 ? 's' : ''} skipped — not included in the calculation:
+                </p>
+                <ul className="mt-1 list-disc pl-5 text-xs space-y-0.5">
+                  {skipped.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              </div>
             )}
             {error && (
               <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>

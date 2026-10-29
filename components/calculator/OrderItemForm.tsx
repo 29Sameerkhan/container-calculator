@@ -118,14 +118,50 @@ function parseMotorItem(row: OrderItem): OrderItem | null {
   };
 }
 
-// Pump item codes start with family then stages, e.g. SK17-07-NK6X6-25BC-1N32-2.
-// Fills Family and Stages (and so the box) from the code. Returns null unless
-// the line is a pump and both parts are valid.
+// Pump series that are physically the same pump as another series (same box
+// and weights), so they resolve to that series
+const PUMP_SERIES_ALIAS: Record<string, string> = { SK95: 'SK77' };
+
+// Series and stages from a pump item code: family then stages, e.g.
+// SK17-07-NK6X6-25BC-1N32-2. Also accepts a hyphen after SK (SK-95-04-…).
+// Returns null when the code doesn't name a known pump family.
+function pumpCodeParts(code: string): { series: string; stagesPart: string } | null {
+  const m = code.trim().toUpperCase().match(/^SK-?(\d+[A-Z]?)(?:-(\d+))?(?:-|$)/);
+  if (!m) return null;
+  const raw = `SK${m[1]}`;
+  const series = PUMP_SERIES_ALIAS[raw] ?? raw;
+  const known = series === 'SK09' || series in PUMP_PALLET_WIDTH;
+  return known ? { series, stagesPart: m[2] ?? '' } : null;
+}
+
+// Why a line's box isn't filled from its code, or null when it is (or the
+// code is empty). Shown under the code so a line is never silently left out.
+export function codeWarning(row: OrderItem): string | null {
+  if (!row.productCode.trim() || isComplete(row)) return null;
+  if (row.productType.startsWith('motor-') || parseMotorCode(row.productCode)) {
+    return parseMotorItem(row) ? null : 'Motor not in the size table — enter box and weights by hand.';
+  }
+  if (row.productType !== 'pump') return null;
+  const parts = pumpCodeParts(row.productCode);
+  if (!parts) return 'Unknown pump family — this line is skipped until you choose a Family and enter the box.';
+  if (!PARSE_FAMILIES.includes(parts.series)) {
+    return `No size formula for ${parts.series} — enter box L/W/H and gross weight by hand.`;
+  }
+  return null;
+}
+
+// Fills Family and Stages (and so the box) from the code. Families without a
+// stage formula (e.g. SK77, SK05) get only their Family; the box stays manual.
+// Returns null unless the line is a pump with a known family.
 function parsePumpItem(row: OrderItem): OrderItem | null {
   if (row.productType !== 'pump') return null;
-  const [familyPart = '', stagesPart = ''] = row.productCode.trim().split('-');
-  const series = familyPart.toUpperCase();
-  if (!PARSE_FAMILIES.includes(series) || !/^\d+$/.test(stagesPart)) return null;
+  const parts = pumpCodeParts(row.productCode);
+  if (!parts) return null;
+  const { series, stagesPart } = parts;
+  if (!PARSE_FAMILIES.includes(series)) {
+    return series === row.palletFamily ? null : applyStages({ ...row, palletFamily: series });
+  }
+  if (!/^\d+$/.test(stagesPart)) return null;
   const stages = parseInt(stagesPart, 10);
   if (!isValidStages(stages)) return null;
 
@@ -137,6 +173,11 @@ function parsePumpItem(row: OrderItem): OrderItem | null {
       : getFamilyOptions('pump').find(f => f.startsWith('SK09-'));
   if (!palletFamily) return null;
   return applyStages({ ...row, palletFamily, stages });
+}
+
+// True when the code filled the box (motor table or stage formula), not only the Family
+function boxFromCode(row: OrderItem): boolean {
+  return row.productType.startsWith('motor-') || stageSeriesFor(row.palletFamily) !== null;
 }
 
 // Quantity is a whole number of boxes. A decimal is kept as typed (not silently
@@ -220,7 +261,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     const parsed = pasted ? parseItemCode(row) : null;
     if (parsed) codeOnFocus.current = code; // already parsed; don't redo on blur
     commitRows(rows.map((r, i) => (i === index ? parsed ?? row : r)));
-    if (parsed) flashAutoFilled(index, parsed.stages !== undefined);
+    if (parsed && boxFromCode(parsed)) flashAutoFilled(index, parsed.stages !== undefined);
   }
 
   function blurProductCode(index: number) {
@@ -228,7 +269,7 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     const parsed = parseItemCode(rows[index]);
     if (!parsed) return;
     commitRows(rows.map((r, i) => (i === index ? parsed : r)));
-    flashAutoFilled(index, parsed.stages !== undefined);
+    if (boxFromCode(parsed)) flashAutoFilled(index, parsed.stages !== undefined);
   }
 
   // Focus a row's Product Code field. A just-added row isn't in the DOM yet, so
@@ -413,6 +454,9 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
                 <Trash2 size={14} />
               </button>
             </div>
+            {codeWarning(row) && (
+              <p className="col-span-full text-xs text-amber-700">⚠ {row.productCode.trim()}: {codeWarning(row)}</p>
+            )}
           </div>
         ))}
       </div>
