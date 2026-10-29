@@ -86,17 +86,19 @@ export function computePumpPalletDimensions(
   skus: Array<{ item: OrderItem; qty: number }>,
   palletWidthMm: number
 ): { lengthMm: number; widthMm: number; heightMm: number } {
+  // Boxes stack in layers up to the stack height, so each SKU only needs
+  // floor length for one column of layers, not for every box
+  const maxBoxHeightMm = Math.max(...skus.map(s => s.item.boxHeightMm));
+  const maxLayers = Math.max(1, Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / maxBoxHeightMm));
   let totalLengthMm = 0;
-  let maxHeightMm = 0;
   for (const { item, qty } of skus) {
-    const orient = bestOrientationForSku(item, palletWidthMm, qty);
+    const orient = bestOrientationForSku(item, palletWidthMm, Math.ceil(qty / maxLayers));
     totalLengthMm += orient.palletLengthContrib;
-    maxHeightMm = Math.max(maxHeightMm, item.boxHeightMm);
   }
   return {
     lengthMm: totalLengthMm,
     widthMm: palletWidthMm,
-    heightMm: maxHeightMm + PALLET_BASE_HEIGHT_MM,
+    heightMm: maxLayers * maxBoxHeightMm + PALLET_BASE_HEIGHT_MM,
   };
 }
 
@@ -111,28 +113,33 @@ function buildPumpPallets(
   items: OrderItem[],
   palletCounter: { value: number }
 ): PalletPlan[] {
+  const MAX_PUMP_BOXES_PER_PALLET = 30;
   const pallets: PalletPlan[] = [];
   const sorted = [...items].sort((a, b) => b.quantity - a.quantity);
   const remaining = new Map<string, number>(
     sorted.map(item => [item.productCode, item.quantity])
   );
+  // The 1500kg limit is for the whole pallet, wood included
+  const woodReserveKg = Math.max(...items.map(i => resolveWoodWeight(i, true)));
 
   while (true) {
     const allPlaced = Array.from(remaining.values()).every(q => q === 0);
     if (allPlaced) break;
 
+    let palletBoxes = 0;
     let palletGrossKg = 0;
     const palletSkus: Array<{ item: OrderItem; qty: number }> = [];
 
     for (const item of sorted) {
       const rem = remaining.get(item.productCode) ?? 0;
       if (rem === 0) continue;
-      const headroom = MAX_PALLET_GROSS_KG - palletGrossKg;
-      if (headroom <= 0) break;
-      const maxQty = Math.floor(headroom / item.grossWeightKg);
-      if (maxQty === 0) continue;
-      const qtyThisPallet = Math.min(rem, maxQty);
+      const countHeadroom = MAX_PUMP_BOXES_PER_PALLET - palletBoxes;
+      const weightHeadroom = MAX_PALLET_GROSS_KG - woodReserveKg - palletGrossKg;
+      if (countHeadroom <= 0 || weightHeadroom <= 0) break;
+      const qtyThisPallet = Math.min(rem, countHeadroom, Math.floor(weightHeadroom / item.grossWeightKg));
+      if (qtyThisPallet <= 0) continue;
       palletSkus.push({ item, qty: qtyThisPallet });
+      palletBoxes += qtyThisPallet;
       palletGrossKg += qtyThisPallet * item.grossWeightKg;
       remaining.set(item.productCode, rem - qtyThisPallet);
     }
@@ -194,6 +201,8 @@ function buildMotorPallets(
     items.map(item => [item.productCode, item.quantity])
   );
   const sorted = [...items].sort((a, b) => b.quantity - a.quantity);
+  // The 1500kg limit is for the whole pallet, wood included
+  const woodReserveKg = Math.max(...items.map(i => resolveWoodWeight(i, true)));
 
   while (true) {
     const allPlaced = Array.from(remaining.values()).every(q => q === 0);
@@ -207,7 +216,7 @@ function buildMotorPallets(
       const rem = remaining.get(item.productCode) ?? 0;
       if (rem === 0) continue;
       const countHeadroom = MAX_MOTORS_PER_PALLET - palletMotors;
-      const weightHeadroom = MAX_PALLET_GROSS_KG - palletGrossKg;
+      const weightHeadroom = MAX_PALLET_GROSS_KG - woodReserveKg - palletGrossKg;
       if (countHeadroom <= 0 || weightHeadroom <= 0) break;
       const maxByCount = countHeadroom;
       const maxByWeight = Math.floor(weightHeadroom / item.grossWeightKg);
