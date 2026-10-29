@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 const OrderItemSchema = z.object({
   productCode: z.string().min(1),
-  productType: z.enum(['pump', 'motor-V4', 'motor-V6', 'controller', 'spare']),
+  productType: z.enum(['pump', 'motor-V4', 'motor-V6', 'motor-V8', 'controller', 'spare']),
   palletFamily: z.string().min(1),
   quantity: z.number().int().min(1),
   boxLengthMm: z.number().min(1),

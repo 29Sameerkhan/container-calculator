@@ -16,7 +16,7 @@ import {
 } from '@/lib/constants';
 
 function isMotor(item: OrderItem): boolean {
-  return item.productType === 'motor-V4' || item.productType === 'motor-V6';
+  return item.productType.startsWith('motor-');
 }
 
 
@@ -24,6 +24,8 @@ function isMotor(item: OrderItem): boolean {
 export function resolvePalletWidth(item: OrderItem): number {
   if (item.productType === 'motor-V4') return MOTOR_PALLET_WIDTH['V4'];
   if (item.productType === 'motor-V6') return MOTOR_PALLET_WIDTH['V6'];
+  // No 8" pallet width from the factory yet; use the widest motor pallet
+  if (item.productType === 'motor-V8') return MOTOR_PALLET_WIDTH['V6'];
   if (item.productType === 'controller' || item.productType === 'spare') {
     console.warn('Controller/spare pallet width defaulting to 715mm — confirm with Mahendra');
     return 715;
@@ -305,8 +307,6 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
   return pallets;
 }
 
-const LCL_THRESHOLD_CBM = 15;
-
 export function computeShipment(items: OrderItem[]): ShipmentResult {
   const pallets = buildPalletPlans(items);
   const warnings: string[] = [];
@@ -330,7 +330,9 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
   });
 
   let containerRecommendation: ShipmentResult['containerRecommendation'];
-  if (totalCBM <= LCL_THRESHOLD_CBM) {
+  // SLEKA books one full container per customer, so LCL only for a single
+  // small pallet; 2+ pallets always get FCL regardless of volume
+  if (pallets.length <= 1 && totalCBM < 2.0) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for FCL. Consolidation charges will apply.');
   } else if (totalCBM <= CONTAINERS.FCL_20FT.maxCBM && totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg && !requires40ft) {
