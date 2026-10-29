@@ -49,8 +49,9 @@ export function computeMotorPalletGeometry(
   item: OrderItem,
   qty: number
 ): { lengthMm: number; widthMm: number; heightMm: number; motorsPerLayer: number; layers: number } {
-  const motorsPerLayer = item.productType === 'motor-V4' ? 4 : 2;
   const palletWidthMm = resolvePalletWidth(item);
+  // As many motors across as the pallet width holds
+  const motorsPerLayer = Math.max(1, Math.floor(palletWidthMm / item.boxWidthMm));
   const maxLayers = Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
   const layers = Math.max(1, Math.min(maxLayers, Math.ceil(qty / motorsPerLayer)));
   const columns = Math.ceil(qty / (motorsPerLayer * layers));
