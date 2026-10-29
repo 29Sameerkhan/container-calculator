@@ -42,3 +42,5 @@ export const CONTAINER_LENGTH_MM = { FCL_20FT: 5898, FCL_40FT: 11998 };
 
 // Max gross weight per pallet (kg) — safe working load for a standard 2-tonne counterbalance forklift.
 // 1,500 kg is conservative: accounts for height-lift penalties and off-centre load
+export const MAX_PALLET_GROSS_KG = 1500;
+export const MAX_PUMP_PALLET_LENGTH_MM = 3700;

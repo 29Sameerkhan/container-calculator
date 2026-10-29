@@ -19,9 +19,7 @@ function isMotor(item: OrderItem): boolean {
   return item.productType === 'motor-V4' || item.productType === 'motor-V6';
 }
 
-function isPump(item: OrderItem): boolean {
-  return item.productType === 'pump';
-}
+
 
 export function resolvePalletWidth(item: OrderItem): number {
   if (item.productType === 'motor-V4') return MOTOR_PALLET_WIDTH['V4'];
