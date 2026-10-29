@@ -8,14 +8,25 @@ import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { formatSavedAt } from '@/lib/format';
 import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
-import { ShipmentResult } from '@/lib/types';
+import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
+import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 
 interface SavedCalculation {
   id: number;
   customerName: string;
   orderRef: string;
+  // OrderItem[] for a single order, ShipmentOrder[] for a multi-order shipment
+  items: OrderItem[] | ShipmentOrder[];
   result: ShipmentResult;
   createdAt: string;
+}
+
+function savedOrders(calc: SavedCalculation): ShipmentOrder[] {
+  const items = calc.items ?? [];
+  const isOrderList = items.length > 0 && Array.isArray((items[0] as ShipmentOrder).items);
+  return isOrderList
+    ? (items as ShipmentOrder[])
+    : [{ customerName: calc.customerName, orderRef: calc.orderRef, items: items as OrderItem[] }];
 }
 
 // useSearchParams needs a Suspense boundary in the App Router
@@ -137,6 +148,7 @@ function CalculationDetail() {
 
         {!loading && !error && calc && (
           <div ref={planRef} className="space-y-6">
+            <PdfCompanyHeader planId={calc.id} date={formatSavedAt(calc.createdAt)} />
             {/* Order details */}
             <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -168,6 +180,7 @@ function CalculationDetail() {
               customerName={isConsolidated ? '' : calc.customerName}
               orderRef={isConsolidated ? '' : calc.orderRef}
             />
+            <PdfOrderLines orders={savedOrders(calc)} />
             {/* Drawn from the positions saved with the result, so it matches what
                 was shown at calculation time */}
             <ContainerFloorPlan

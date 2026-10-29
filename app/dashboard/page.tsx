@@ -10,6 +10,7 @@ import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
+import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 
 // One order card on the dashboard. `items` are the rows its form starts with
 // (empty for a new order, or loaded from a saved calculation); live edits are
@@ -417,7 +418,12 @@ function DashboardInner() {
         {/* Results */}
         {result && (
           <div ref={planRef} className="space-y-4">
+            <PdfCompanyHeader
+              planId={savedId}
+              date={new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}
+            />
             <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
+            <PdfOrderLines orders={calculatedOrders} />
             <ContainerFloorPlan
               pallets={result.pallets}
               recommendation={result.containerRecommendation}

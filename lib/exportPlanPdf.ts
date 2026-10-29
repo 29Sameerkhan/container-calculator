@@ -22,6 +22,8 @@ export async function exportPlanPdf(element: HTMLElement, filename: string): Pro
       clone.style.width = `${width}px`;
       clone.querySelectorAll<HTMLElement>('.overflow-x-auto').forEach(el => { el.style.overflow = 'visible'; });
       clone.querySelectorAll<HTMLElement>('[data-pdf-hide]').forEach(el => { el.style.display = 'none'; });
+      // PDF-only parts (company header, product entries) are hidden on screen
+      clone.querySelectorAll<HTMLElement>('[data-pdf-only]').forEach(el => { el.style.display = 'block'; });
       // Shortened cells (product codes, customers) print in full, wrapped;
       // html2canvas also draws clipped text shifted down
       clone.querySelectorAll<HTMLElement>('.truncate').forEach(el => {
