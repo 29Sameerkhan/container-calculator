@@ -87,7 +87,7 @@ function applyStages(row: OrderItem): OrderItem {
 }
 
 // Pump families whose stage count can be read from the item code
-const PARSE_FAMILIES = ['SK09', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B'];
+const PARSE_FAMILIES = ['SK09', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B', 'SK77'];
 
 // Fills the line from its item code: a motor code (SM-…) or a pump code (SK…).
 // Returns null, leaving the row as it is, when the code isn't recognised.
@@ -151,7 +151,7 @@ export function codeWarning(row: OrderItem): string | null {
 }
 
 // Fills Family and Stages (and so the box) from the code. Families without a
-// stage formula (e.g. SK77, SK05) get only their Family; the box stays manual.
+// stage formula (e.g. SK05) get only their Family; the box stays manual.
 // Returns null unless the line is a pump with a known family.
 function parsePumpItem(row: OrderItem): OrderItem | null {
   if (row.productType !== 'pump') return null;
