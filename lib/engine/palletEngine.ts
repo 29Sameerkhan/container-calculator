@@ -268,7 +268,11 @@ function buildMotorPallets(
 
     const repItem = palletSkus[0].item;
     const totalQty = palletSkus.reduce((s, x) => s + x.qty, 0);
-    const { lengthMm, widthMm, heightMm } = computeMotorPalletGeometry(repItem, totalQty);
+    // Mixed pallets are as long as their longest motor box
+    const longestItem = palletSkus.reduce((a, b) =>
+      b.item.boxLengthMm > a.item.boxLengthMm ? b : a
+    ).item;
+    const { lengthMm, widthMm, heightMm } = computeMotorPalletGeometry(longestItem, totalQty);
     const isMixedSku = palletSkus.length > 1;
     const woodWeightKg = Math.max(...palletSkus.map(s => resolveWoodWeight(s.item, isMixedSku)));
     const totalGrossKg = palletGrossKg + woodWeightKg;
