@@ -16,10 +16,10 @@ export const PUMP_PALLET_WIDTH: Record<string, number> = {
 
 // Motor pallet width by series
 // V4 = 6" CI motors (narrower pallet): 770mm — verified from SK-02 packing list pallet W=770
-// V6 = 8" CI motors (wider pallet):   1020mm — verified from SK-03 packing list pallet W=1020
+// V6 = 8" CI motors (wider pallet):   890mm — 5 motor boxes of 178mm across (was 1020 from SK-03 packing list)
 export const MOTOR_PALLET_WIDTH: Record<string, number> = {
   'V4': 770,
-  'V6': 1020,
+  'V6': 890,
 };
 
 // Wood weight constants (kg)

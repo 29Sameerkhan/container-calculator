@@ -429,26 +429,41 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
   if (built.length <= 1 && totalCBM < 2.0) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for FCL. Consolidation charges will apply.');
-  } else if (allows20ft && fitsFloor(built, len20)) {
+  } else if (allows20ft) {
     containerRecommendation = 'FCL_20FT';
-  } else if (allows20ft && fitsFloor(stacked, len20)) {
-    containerRecommendation = 'FCL_20FT';
-    applyStacking('20ft');
-  } else if (allows40ft && fitsFloor(built, len40)) {
+  } else if (allows40ft) {
     containerRecommendation = 'FCL_40FT';
-  } else if (allows40ft && fitsFloor(stacked, len40)) {
-    containerRecommendation = 'FCL_40FT';
-    applyStacking('40ft');
   } else {
     containerRecommendation = 'MULTI_CONTAINER';
     pallets = stacked;
     const containersByVolume = Math.ceil(totalCBM / CONTAINERS.FCL_40FT.maxCBM);
     const containersByWeight = Math.ceil(totalGrossKg / CONTAINERS.FCL_40FT.maxPayloadKg);
-    // Within the 40ft limits but not on one 40ft floor even stacked: floor space is the limit
-    const floorLimited = allows40ft;
-    containersNeeded = Math.max(containersByVolume, containersByWeight, floorLimited ? 2 : 1);
-    const limitingFactor = floorLimited ? 'floor space' : containersByVolume >= containersByWeight ? 'volume' : 'weight';
+    containersNeeded = Math.max(containersByVolume, containersByWeight);
+    const limitingFactor = containersByWeight > containersByVolume ? 'weight' : 'volume';
     warnings.push(`Requires ~${containersNeeded} × 40ft FCL — limited by ${limitingFactor}.`);
+  }
+
+  // The container is chosen by CBM, payload and pallet length only (the strip
+  // packer is simpler than a real loading plan). If the drawn floor plan doesn't
+  // fit flat, safe stacks are used to tighten it and the plan is flagged.
+  if (containerRecommendation === 'FCL_20FT' || containerRecommendation === 'FCL_40FT') {
+    const length = containerRecommendation === 'FCL_20FT' ? len20 : len40;
+    const size = containerRecommendation === 'FCL_20FT' ? '20ft' : '40ft';
+    if (!fitsFloor(built, length)) {
+      if (fitsFloor(stacked, length)) {
+        applyStacking(size);
+      } else {
+        const overflowOf = (ps: PalletPlan[]) => packPallets(ps, length).filter(p => p.overflow).length;
+        const useStacks = overflowOf(stacked) < overflowOf(built);
+        if (useStacks) pallets = stacked;
+        const pairs = stacked.filter(p => p.stackPosition === 'bottom').length;
+        warnings.push(
+          `Floor plan is approximate — the auto layout doesn't fit every pallet on a ${size} floor` +
+          (useStacks ? ` even with ${pairs} safe stacked pair${pairs === 1 ? '' : 's'}` : '') +
+          '. Confirm the loading plan with Mahendra.'
+        );
+      }
+    }
   }
 
   if (containerRecommendation === 'FCL_20FT') {
