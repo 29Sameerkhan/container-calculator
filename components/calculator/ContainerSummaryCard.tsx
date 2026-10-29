@@ -183,7 +183,7 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
                 </tr>
               </thead>
               <tbody className="divide-y divide-blue-50">
-                {result.perCustomer.map((c, i) => (
+                {(result.perCustomer ?? []).map((c, i) => (
                   <tr key={`${c.customerName}-${c.orderRef}-${i}`}>
                     <td className="px-4 py-2 font-medium text-gray-800">
                       {c.customerName || <span className="text-gray-400 italic">—</span>}
