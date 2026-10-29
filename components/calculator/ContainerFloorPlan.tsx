@@ -47,6 +47,7 @@ export default function ContainerFloorPlan({ pallets, recommendation, placed: sa
   const container = CONTAINERS[containerKey];
   const placed = savedPlaced ?? packPallets(pallets, container.LENGTH);
   const overflowCount = placed.filter(p => p.overflow).length;
+  const stackedCount = placed.filter(p => p.stackedPallet).length;
 
   const cW = px(C_WIDTH_MM);
   const cL = px(container.LENGTH);
@@ -129,6 +130,11 @@ export default function ContainerFloorPlan({ pallets, recommendation, placed: sa
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {stackedCount > 0 && (
+            <span className="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1">
+              ⬆ {stackedCount} pallet{stackedCount > 1 ? 's' : ''} stacked
+            </span>
+          )}
           {overflowCount > 0 && (
             <span className="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1">
               ⚠ {overflowCount} pallet{overflowCount > 1 ? 's' : ''} overflow
