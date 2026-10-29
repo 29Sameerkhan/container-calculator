@@ -17,10 +17,20 @@ const OrderItemSchema = z.object({
   weightManualEntry: z.boolean().optional(),
 });
 
-const RequestSchema = z.object({
+const ShipmentOrderSchema = z.object({
+  customerName: z.string().default(''),
+  orderRef: z.string().default(''),
   items: z.array(OrderItemSchema).min(1),
+});
+
+// The dashboard sends { orders }; a flat { items } list is also accepted
+const RequestSchema = z.object({
+  orders: z.array(ShipmentOrderSchema).min(1).optional(),
+  items: z.array(OrderItemSchema).min(1).optional(),
   customerName: z.string().optional(),
   orderRef: z.string().optional(),
+}).refine(body => body.orders !== undefined || body.items !== undefined, {
+  message: 'Provide either orders or items',
 });
 
 export async function POST(req: NextRequest) {
@@ -35,7 +45,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = computeShipment(parsed.data.items as OrderItem[]);
+    // Each order's lines are tagged with its customer so the engine never
+    // puts two customers' boxes on one pallet
+    const { orders, items } = parsed.data;
+    const allItems = orders
+      ? orders.flatMap(o => o.items.map(item => ({ ...item, customer: item.customer || o.customerName || o.orderRef })))
+      : items!;
+
+    const result = computeShipment(allItems as OrderItem[]);
 
     return NextResponse.json({
       success: true,
