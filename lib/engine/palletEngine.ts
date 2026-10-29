@@ -76,7 +76,9 @@ export function bestOrientationForSku(
   const bprB = fitsB ? Math.max(1, Math.floor(palletWidthMm / item.boxLengthMm)) : 0;
   const rowsB = fitsB ? Math.ceil(qty / bprB) : Infinity;
   const lengthB = fitsB ? rowsB * item.boxWidthMm : Infinity;
-  if (fitsB && lengthB < lengthA) {
+  // More boxes per row means fewer layers, so a lower pallet; the shorter
+  // length only decides between orientations of equal density
+  if (fitsB && (bprB > bprA || (bprB === bprA && lengthB < lengthA))) {
     return { bpr: bprB, rowLengthMm: item.boxWidthMm, palletLengthContrib: lengthB, rotated: true };
   }
   return { bpr: bprA, rowLengthMm: item.boxLengthMm, palletLengthContrib: lengthA, rotated: false };
