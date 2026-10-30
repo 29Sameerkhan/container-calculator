@@ -45,7 +45,7 @@ export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number 
   if (isMotor(item)) {
     return isMixedSku ? WOOD_WEIGHT.MOTOR_MIXED_SKU : WOOD_WEIGHT.MOTOR_SINGLE_SKU;
   }
-  const heavyFamilies = ['SK77', 'SK95', 'SK95A', 'SK95B'];
+  const heavyFamilies = ['SK77', 'SK95'];
   return heavyFamilies.includes(item.palletFamily)
     ? WOOD_WEIGHT.PUMP_HEAVY
     : WOOD_WEIGHT.PUMP_LIGHT;

@@ -6,7 +6,7 @@ export const CONTAINERS = {
 
 // Pump pallet width lookup by family
 export const PUMP_PALLET_WIDTH: Record<string, number> = {
-  'SK77': 920, 'SK95': 920, 'SK95A': 920, 'SK95B': 920,
+  'SK77': 920, 'SK95': 920,
   'SK30': 770, 'SK46': 770,
   'SK17': 720, 'SK60': 720, 'SK60B': 720,
   'SK09-large': 770,
