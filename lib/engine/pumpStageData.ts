@@ -23,6 +23,7 @@ const PUMP_STAGE_DATA: Record<string, StageData> = {
   // so the whole length and weight sit in the pump terms
   SK77: { basePumpLen: 682,   lenPerStage: 128,    basePumpWt: 24.635, wtPerStage: 141.955 / 9, tubeOffset: 0, baseTubeWt: 0, tubeWtPerStage: 0, tubeW: 203, tubeH: 203, packingKg: 1.0 },
   SK09: { basePumpLen: 242,   lenPerStage: 50,     basePumpWt: 1.896,  wtPerStage: 0.4760, tubeOffset: 100, baseTubeWt: 0.6814, tubeWtPerStage: 0.0850, tubeW: 100, tubeH: 100, packingKg: 1.0 },
+  SK12: { basePumpLen: 336.5, lenPerStage: 60.5,  basePumpWt: 7.079,  wtPerStage: 0.9790, tubeOffset: 110, baseTubeWt: 1.7395, tubeWtPerStage: 0.1815, tubeW: 152, tubeH: 152, packingKg: 1.0 },
 };
 
 export const MIN_STAGES = 1;
@@ -31,12 +32,14 @@ export const MAX_STAGES = 40;
 
 // Stage series for a pallet family, or null if its box is entered manually.
 // SK09 is split into size families (SK09-large/-medium/-small) that share one series;
-// SK60B uses the SK60 formula (confirmed by Yagnik); SK95 is the same pump as SK77.
+// SK60B uses the SK60 formula (confirmed by Yagnik); SK95 is the same pump as SK77;
+// SK14 uses the SK12 formula (Excel tab SK12-14_6X6BC).
 export function stageSeriesFor(family: string): string | null {
   if (family in PUMP_STAGE_DATA) return family;
   if (family.startsWith('SK09-')) return 'SK09';
   if (family === 'SK60B') return 'SK60';
   if (family === 'SK95') return 'SK77';
+  if (family === 'SK14') return 'SK12';
   return null;
 }
 
