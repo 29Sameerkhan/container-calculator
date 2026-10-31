@@ -147,6 +147,10 @@ export function codeWarning(row: OrderItem): string | null {
   if (!PARSE_FAMILIES.includes(parts.series)) {
     return `No size formula for ${parts.series} — enter box L/W/H and gross weight by hand.`;
   }
+  const stages = Number(parts.stagesPart);
+  if (parts.stagesPart && !isValidStages(stages) && row.stages === undefined) {
+    return `${stages} stages is outside ${MIN_STAGES}–${MAX_STAGES} — check the code, or enter Stages by hand.`;
+  }
   return null;
 }
 

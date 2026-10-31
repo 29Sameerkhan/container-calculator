@@ -27,8 +27,9 @@ const PUMP_STAGE_DATA: Record<string, StageData> = {
 };
 
 export const MIN_STAGES = 1;
-// Real codes go past 20 (e.g. SK17-22-NK6X6-30NC); boxes this long get a long pallet
-export const MAX_STAGES = 40;
+// Real codes go well past 20 (e.g. SK17-22-NK6X6-30NC, SK-09-52); boxes this long
+// get a long pallet, and the engine warns when one passes the pallet length limit
+export const MAX_STAGES = 60;
 
 // Stage series for a pallet family, or null if its box is entered manually.
 // SK09 is split into size families (SK09-large/-medium/-small) that share one series;
