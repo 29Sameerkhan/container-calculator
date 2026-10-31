@@ -87,7 +87,7 @@ function applyStages(row: OrderItem): OrderItem {
 }
 
 // Pump families whose stage count can be read from the item code
-const PARSE_FAMILIES = ['SK09', 'SK12', 'SK14', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B', 'SK77'];
+const PARSE_FAMILIES = ['SK09', 'SK12', 'SK13', 'SK14', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B', 'SK77'];
 
 // Fills the line from its item code: a motor code (SM-…) or a pump code (SK…).
 // Returns null, leaving the row as it is, when the code isn't recognised.
@@ -120,7 +120,7 @@ function parseMotorItem(row: OrderItem): OrderItem | null {
 
 // Pump series that are physically the same pump as another series (same box
 // and weights), so they resolve to that series
-const PUMP_SERIES_ALIAS: Record<string, string> = { SK95: 'SK77', SK14: 'SK12' };
+const PUMP_SERIES_ALIAS: Record<string, string> = { SK95: 'SK77', SK13: 'SK12', SK14: 'SK12' };
 
 // Series and stages from a pump item code: family then stages, e.g.
 // SK17-07-NK6X6-25BC-1N32-2. Also accepts a hyphen after SK (SK-95-04-…).

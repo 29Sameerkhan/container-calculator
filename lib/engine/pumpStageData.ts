@@ -33,12 +33,13 @@ export const MAX_STAGES = 40;
 // Stage series for a pallet family, or null if its box is entered manually.
 // SK09 is split into size families (SK09-large/-medium/-small) that share one series;
 // SK60B uses the SK60 formula (confirmed by Yagnik); SK95 is the same pump as SK77;
-// SK14 uses the SK12 formula (Excel tab SK12-14_6X6BC).
+// SK13 and SK14 use the SK12 formula (Excel tab SK12-14_6X6BC).
 export function stageSeriesFor(family: string): string | null {
   if (family in PUMP_STAGE_DATA) return family;
   if (family.startsWith('SK09-')) return 'SK09';
   if (family === 'SK60B') return 'SK60';
   if (family === 'SK95') return 'SK77';
+  if (family === 'SK13') return 'SK12';
   if (family === 'SK14') return 'SK12';
   return null;
 }

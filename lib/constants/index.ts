@@ -8,7 +8,7 @@ export const CONTAINERS = {
 export const PUMP_PALLET_WIDTH: Record<string, number> = {
   'SK77': 920, 'SK95': 920,
   'SK30': 770, 'SK46': 770,
-  'SK12': 720, 'SK14': 720,
+  'SK12': 720, 'SK13': 720, 'SK14': 720,
   'SK17': 720, 'SK60': 720, 'SK60B': 720,
   'SK09-large': 770,
   'SK09-medium': 615, 'SK02': 615, 'SK03': 615,
