@@ -14,6 +14,9 @@ interface Props {
   // Rows to start with (e.g. a saved calculation being edited); read on mount only.
   // The parent already knows these, so onRowsChange is not called for them.
   initialRows?: OrderItem[];
+  // Called with the Customer Name and Order Reference read from an imported
+  // Excel file (only the values the file has; blank cells are left out)
+  onImportDetails?: (details: { customerName?: string; orderRef?: string }) => void;
 }
 
 const PRODUCT_TYPES = [
@@ -227,10 +230,17 @@ function linesFromImport(entries: { code: string; qty: number; sheetRow: number 
   return { rows, skipped };
 }
 
-// Reads PRODUCT CODE (column A) and QTY (column B) from the "Import" sheet,
-// skipping the header row and blank rows. Runs in the browser; the file is
-// never uploaded. SheetJS is loaded only when a file is imported.
-async function readImportSheet(file: File): Promise<{ code: string; qty: number; sheetRow: number }[]> {
+interface ImportSheet {
+  customerName: string;
+  orderRef: string;
+  entries: { code: string; qty: number; sheetRow: number }[];
+}
+
+// Reads the "Import" sheet: Customer Name in B1, Order Reference in B2, the
+// PRODUCT CODE | QTY header in row 3, then product lines (code in A, qty in B)
+// from row 4, skipping blank rows. Runs in the browser; the file is never
+// uploaded. SheetJS is loaded only when a file is imported.
+async function readImportSheet(file: File): Promise<ImportSheet> {
   const XLSX = await import('xlsx');
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
   const sheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === 'import');
@@ -240,17 +250,22 @@ async function readImportSheet(file: File): Promise<{ code: string; qty: number;
     defval: null,
     blankrows: true,
   });
-  return cells
+  const cell = (row: number, col: number) => String(cells[row]?.[col] ?? '').trim();
+  if (cell(2, 0).toUpperCase() !== 'PRODUCT CODE') {
+    throw new Error('Expected the PRODUCT CODE | QTY header in row 3 of the Import sheet.');
+  }
+  const entries = cells
     .map((cols, i) => ({
       code: String(cols[0] ?? '').trim(),
       qty: typeof cols[1] === 'number' ? cols[1] : Number(String(cols[1] ?? '').trim()),
       sheetRow: i + 1,
     }))
-    .slice(1)
+    .slice(3)
     .filter(entry => entry.code !== '');
+  return { customerName: cell(0, 1), orderRef: cell(1, 1), entries };
 }
 
-export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
+export default function OrderItemForm({ onRowsChange, initialRows, onImportDetails }: Props) {
   const [rows, setRows] = useState<OrderItem[]>(() =>
     initialRows?.length ? initialRows : [emptyRow() as OrderItem]
   );
@@ -370,7 +385,12 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     setImporting(true);
     setImportNotice(null);
     try {
-      const { rows: imported, skipped } = linesFromImport(await readImportSheet(file));
+      const sheet = await readImportSheet(file);
+      onImportDetails?.({
+        ...(sheet.customerName && { customerName: sheet.customerName }),
+        ...(sheet.orderRef && { orderRef: sheet.orderRef }),
+      });
+      const { rows: imported, skipped } = linesFromImport(sheet.entries);
       if (imported.length > 0) {
         commitRows([...rows.filter(r => r.productCode.trim() !== ''), ...imported]);
       }

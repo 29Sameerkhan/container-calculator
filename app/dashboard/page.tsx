@@ -387,6 +387,10 @@ function DashboardInner() {
             <OrderItemForm
               initialRows={order.items}
               onRowsChange={rows => handleRowsChange(order.id, rows)}
+              onImportDetails={({ customerName, orderRef }) => {
+                if (customerName !== undefined) updateOrder(order.id, 'customerName', customerName);
+                if (orderRef !== undefined) updateOrder(order.id, 'orderRef', orderRef);
+              }}
             />
           </section>
         ))}
