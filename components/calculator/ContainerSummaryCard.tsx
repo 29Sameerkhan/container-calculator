@@ -36,6 +36,9 @@ interface Props {
   orderRef: string;
 }
 
+// Below this total gross weight a full-container booking is suggested as LCL instead
+const LCL_SUGGEST_BELOW_KG = 10000;
+
 const CONTAINER_LABELS: Record<ShipmentResult['containerRecommendation'], { label: string; color: string; bg: string }> = {
   LCL: { label: 'LCL', color: 'text-yellow-800', bg: 'bg-yellow-100 border-yellow-200' },
   FCL_20FT: { label: '20ft FCL', color: 'text-green-700', bg: 'bg-green-50 border-green-200' },
@@ -63,6 +66,8 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
   const wtUtil = isFcl
     ? ((result.totalGrossKg / container.maxPayloadKg) * 100).toFixed(1)
     : null;
+  // A light load may be cheaper as LCL than a full container; the full breakdown still shows
+  const suggestLcl = result.containerRecommendation !== 'LCL' && result.totalGrossKg < LCL_SUGGEST_BELOW_KG;
 
   return (
     <div className={`rounded-xl border-2 p-6 ${rec.bg}`}>
@@ -89,6 +94,13 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
           </div>
         </div>
       </div>
+
+      {suggestLcl && (
+        <p className="mt-4 rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm text-yellow-900">
+          💡 Total gross weight is under {LCL_SUGGEST_BELOW_KG.toLocaleString()} kg — consider LCL shipment instead
+          of booking a full {isMulti ? 'container' : `${rec.label.replace(' FCL', '')} container`}.
+        </p>
+      )}
 
       <div className="mt-4 grid grid-cols-3 gap-4 pt-4 border-t border-current/10">
         <div>
