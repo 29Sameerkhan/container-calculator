@@ -5,7 +5,7 @@ import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
 import { calcPumpBox, isValidStages, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
 import { calcMotorBox, parseMotorCode } from '@/lib/engine/motorData';
-import { Trash2, Plus } from 'lucide-react';
+import { Trash2, Plus, FileSpreadsheet, X } from 'lucide-react';
 
 interface Props {
   // Called synchronously with the full rows array on every change, so the
@@ -202,6 +202,54 @@ export function isComplete(row: OrderItem): boolean {
   );
 }
 
+interface ImportResult {
+  rows: OrderItem[];
+  skipped: string[];
+}
+
+// Builds lines from imported (code, qty) pairs exactly as if each code had been
+// pasted into a new line. A line whose box can't be filled from its code, or
+// whose quantity isn't a whole number above 0, is skipped with a reason.
+function linesFromImport(entries: { code: string; qty: number; sheetRow: number }[]): ImportResult {
+  const rows: OrderItem[] = [];
+  const skipped: string[] = [];
+  for (const { code, qty, sheetRow } of entries) {
+    const row = { ...emptyRow(), productCode: code, quantity: qty } as OrderItem;
+    const parsed = parseItemCode(row) ?? row;
+    if (!Number.isInteger(qty) || qty <= 0) {
+      skipped.push(`Row ${sheetRow}: ${code} — quantity "${qty}" isn't a whole number above 0`);
+    } else if (!isComplete(parsed)) {
+      skipped.push(`Row ${sheetRow}: ${code} — ${codeWarning(parsed) ?? 'not recognised'}`);
+    } else {
+      rows.push(parsed);
+    }
+  }
+  return { rows, skipped };
+}
+
+// Reads PRODUCT CODE (column A) and QTY (column B) from the "Import" sheet,
+// skipping the header row and blank rows. Runs in the browser; the file is
+// never uploaded. SheetJS is loaded only when a file is imported.
+async function readImportSheet(file: File): Promise<{ code: string; qty: number; sheetRow: number }[]> {
+  const XLSX = await import('xlsx');
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const sheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === 'import');
+  if (!sheetName) throw new Error('No sheet named "Import" in this file.');
+  const cells = XLSX.utils.sheet_to_json<(string | number | null)[]>(workbook.Sheets[sheetName], {
+    header: 1,
+    defval: null,
+    blankrows: true,
+  });
+  return cells
+    .map((cols, i) => ({
+      code: String(cols[0] ?? '').trim(),
+      qty: typeof cols[1] === 'number' ? cols[1] : Number(String(cols[1] ?? '').trim()),
+      sheetRow: i + 1,
+    }))
+    .slice(1)
+    .filter(entry => entry.code !== '');
+}
+
 export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
   const [rows, setRows] = useState<OrderItem[]>(() =>
     initialRows?.length ? initialRows : [emptyRow() as OrderItem]
@@ -313,6 +361,27 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
     commitRows(rows.filter((_, i) => i !== index));
   }
 
+  // Excel import: imported lines replace blank lines and are added after the rest
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importNotice, setImportNotice] = useState<{ added: number; skipped: string[]; error?: string } | null>(null);
+
+  async function importFile(file: File) {
+    setImporting(true);
+    setImportNotice(null);
+    try {
+      const { rows: imported, skipped } = linesFromImport(await readImportSheet(file));
+      if (imported.length > 0) {
+        commitRows([...rows.filter(r => r.productCode.trim() !== ''), ...imported]);
+      }
+      setImportNotice({ added: imported.length, skipped });
+    } catch (e) {
+      setImportNotice({ added: 0, skipped: [], error: e instanceof Error ? e.message : 'Could not read this file.' });
+    } finally {
+      setImporting(false);
+    }
+  }
+
   const completedCount = rows.filter(isComplete).length;
 
   return (
@@ -330,7 +399,55 @@ export default function OrderItemForm({ onRowsChange, initialRows }: Props) {
         >
           <Plus size={15} /> Add Line
         </button>
+        <button
+          onClick={() => fileInput.current?.click()}
+          disabled={importing}
+          className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
+        >
+          <FileSpreadsheet size={15} /> {importing ? 'Importing…' : 'Import Excel'}
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          className="hidden"
+          onChange={e => {
+            const file = e.target.files?.[0];
+            e.target.value = ''; // the same file can be picked again
+            if (file) void importFile(file);
+          }}
+        />
       </div>
+
+      {importNotice && (
+        <div
+          role="status"
+          className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+            importNotice.error || importNotice.added === 0
+              ? 'border-red-200 bg-red-50 text-red-700'
+              : importNotice.skipped.length > 0
+                ? 'border-amber-200 bg-amber-50 text-amber-800'
+                : 'border-green-200 bg-green-50 text-green-700'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <p className="font-medium">
+              {importNotice.error
+                ? `Import failed: ${importNotice.error}`
+                : `${importNotice.added} item${importNotice.added === 1 ? '' : 's'} imported successfully` +
+                  (importNotice.skipped.length > 0 ? ` · ${importNotice.skipped.length} skipped` : '')}
+            </p>
+            <button onClick={() => setImportNotice(null)} aria-label="Dismiss" className="opacity-60 hover:opacity-100">
+              <X size={14} />
+            </button>
+          </div>
+          {importNotice.skipped.length > 0 && (
+            <ul className="mt-1 list-disc pl-5 text-xs space-y-0.5">
+              {importNotice.skipped.map((s, i) => <li key={i}>{s}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Column headings — only on wide screens; narrower screens show a label per field */}
       <div className={`hidden lg:grid ${ROW_COLS} text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100 pb-2`}>
