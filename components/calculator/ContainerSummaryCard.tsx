@@ -1,7 +1,7 @@
 'use client';
 
 import { PalletPlan, ShipmentResult } from '@/lib/types';
-import { CONTAINERS } from '@/lib/constants';
+import { CONTAINERS, LCL_SUGGEST_BELOW_KG } from '@/lib/constants';
 
 interface ContainerSplit {
   container: number;
@@ -35,9 +35,6 @@ interface Props {
   customerName: string;
   orderRef: string;
 }
-
-// Below this total gross weight a full-container booking is suggested as LCL instead
-const LCL_SUGGEST_BELOW_KG = 10000;
 
 const CONTAINER_LABELS: Record<ShipmentResult['containerRecommendation'], { label: string; color: string; bg: string }> = {
   LCL: { label: 'LCL', color: 'text-yellow-800', bg: 'bg-yellow-100 border-yellow-200' },

@@ -45,3 +45,7 @@ export const CONTAINER_LENGTH_MM = { FCL_20FT: 5898, FCL_40FT: 11998 };
 // 1,500 kg is conservative: accounts for height-lift penalties and off-centre load
 export const MAX_PALLET_GROSS_KG = 1500;
 export const MAX_PUMP_PALLET_LENGTH_MM = 3700;
+
+// Below this total gross weight (kg) LCL is suggested instead of a full container:
+// a load that fits a 20ft is recommended as LCL, a 40ft load gets a note
+export const LCL_SUGGEST_BELOW_KG = 10000;

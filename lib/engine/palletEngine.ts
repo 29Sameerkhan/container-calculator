@@ -13,6 +13,7 @@ import {
   PALLET_BASE_HEIGHT_MM,
   MAX_PALLET_GROSS_KG,
   MAX_PUMP_PALLET_LENGTH_MM,
+  LCL_SUGGEST_BELOW_KG,
 } from '@/lib/constants';
 import { packPallets } from '@/lib/engine/floorPlan';
 
@@ -434,11 +435,17 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
     warnings.push(`${pairs} stacked pair${pairs === 1 ? '' : 's'} needed to fit a ${size} — pallets stacked two-high, confirm with Mahendra before loading`);
   };
 
-  // SLEKA books one full container per customer, so LCL only for a single
-  // small pallet; 2+ pallets always get FCL regardless of volume
+  // LCL for a single small pallet, or for any load that fits a 20ft but is too
+  // light to be worth a full container
   if (built.length <= 1 && totalCBM < 2.0) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for FCL. Consolidation charges will apply.');
+  } else if (allows20ft && totalGrossKg < LCL_SUGGEST_BELOW_KG) {
+    containerRecommendation = 'LCL';
+    warnings.push(
+      `LCL recommended — total gross weight ${Math.round(totalGrossKg).toLocaleString('en-US')} kg is under ` +
+      `${LCL_SUGGEST_BELOW_KG.toLocaleString('en-US')} kg. If booked as FCL instead, it fits a 20ft container.`
+    );
   } else if (allows20ft) {
     containerRecommendation = 'FCL_20FT';
   } else if (allows40ft) {
