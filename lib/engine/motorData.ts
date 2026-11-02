@@ -48,6 +48,7 @@ const MOTOR_DATA: Record<string, MotorBox> = {
   // ── 8" CI ── stub, data not yet available
 
   // ── 4" / 6" / 8" SI ── stub, data not yet available
+  // (SM-S-I- solar motors use the CI rows, see MOTOR_PREFIX_ALIAS)
 };
 
 export function motorKey(material: MotorMaterial, size: MotorSize, hp: number): string {
@@ -67,12 +68,19 @@ export function calcMotorBox(material: MotorMaterial, size: MotorSize, hp: numbe
   };
 }
 
+// Motor code prefixes (after SM-) that are physically the same motor as another
+// prefix (same box and weight for the same HP and size), so they look up its data.
+// SM-S-I- (solar motor, SS shaft) is the SM-C-I- cast-iron motor.
+const MOTOR_PREFIX_ALIAS: Record<string, string> = { 'S-I': 'C-I' };
+
 // Motor item codes: SM-<material>-<x>-<HP>-<size>-..., e.g. SM-C-I-10-V4-50.
 // Returns null unless material, HP and size are all recognised.
 export function parseMotorCode(code: string): { material: MotorMaterial; size: MotorSize; hp: number } | null {
   const parts = code.trim().toUpperCase().split('-');
   if (parts[0] !== 'SM') return null;
-  const [, material = '', , hpPart = '', size = ''] = parts;
+  const [, rawMaterial = '', rawVariant = '', hpPart = '', size = ''] = parts;
+  const prefix = MOTOR_PREFIX_ALIAS[`${rawMaterial}-${rawVariant}`] ?? `${rawMaterial}-${rawVariant}`;
+  const material = prefix.split('-')[0];
   if (material !== 'C' && material !== 'S') return null;
   if (size !== 'V4' && size !== 'V6' && size !== 'V8') return null;
   if (!/^\d+(\.\d+)?$/.test(hpPart)) return null;
