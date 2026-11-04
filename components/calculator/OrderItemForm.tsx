@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
-import { calcPumpBox, isValidStages, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
+import { calcPumpBox, hasStageWeight, isValidStages, pumpColumnFromCode, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
 import { calcMotorBox, parseMotorCode } from '@/lib/engine/motorData';
 import { Trash2, Plus, FileSpreadsheet, X } from 'lucide-react';
 
@@ -71,13 +71,15 @@ const emptyRow = (): Omit<OrderItem, 'palletFamily'> & { palletFamily: string } 
   grossWeightKg: 0,
 });
 
-// Stage families: box size and net weight follow the stage count. Without a
-// valid count they are cleared, so the line stays incomplete until it is entered.
+// Stage families: box size and net weight follow the stage count (and the pump
+// column in the item code, e.g. NK6X6). Without a valid count they are cleared,
+// so the line stays incomplete until it is entered. Series without weight data
+// (SK02, SK03, SK05) fill only the box; gross weight is typed by hand.
 // Other families drop any stage count and keep their manual values.
 function applyStages(row: OrderItem): OrderItem {
   const series = stageSeriesFor(row.palletFamily);
   if (!series) return { ...row, stages: undefined };
-  const box = isValidStages(row.stages) ? calcPumpBox(series, row.stages) : null;
+  const box = isValidStages(row.stages) ? calcPumpBox(series, row.stages, pumpColumnFromCode(row.productCode)) : null;
   return {
     ...row,
     boxLengthMm: box?.L ?? 0,
@@ -90,7 +92,7 @@ function applyStages(row: OrderItem): OrderItem {
 }
 
 // Pump families whose stage count can be read from the item code
-const PARSE_FAMILIES = ['SK09', 'SK12', 'SK13', 'SK14', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B', 'SK77'];
+const PARSE_FAMILIES = ['SK02', 'SK03', 'SK05', 'SK09', 'SK12', 'SK13', 'SK14', 'SK17', 'SK30', 'SK46', 'SK60', 'SK60B', 'SK77'];
 
 // Fills the line from its item code: a motor code (SM-…) or a pump code (SK…).
 // Returns null, leaving the row as it is, when the code isn't recognised.
@@ -154,6 +156,10 @@ export function codeWarning(row: OrderItem): string | null {
   if (parts.stagesPart && !isValidStages(stages) && row.stages === undefined) {
     return `${stages} stages is outside ${MIN_STAGES}–${MAX_STAGES} — check the code, or enter Stages by hand.`;
   }
+  const series = stageSeriesFor(parts.series);
+  if (series && !hasStageWeight(series) && row.boxLengthMm > 0 && row.grossWeightKg <= 0) {
+    return `No weight data for ${parts.series} yet — box filled from the length table; enter gross kg/box by hand.`;
+  }
   return null;
 }
 
@@ -182,9 +188,11 @@ function parsePumpItem(row: OrderItem): OrderItem | null {
   return applyStages({ ...row, palletFamily, stages });
 }
 
-// True when the code filled the box (motor table or stage formula), not only the Family
+// True when the code filled the box and gross weight (motor table or stage
+// formula), not only the Family; the gross field is highlighted only then
 function boxFromCode(row: OrderItem): boolean {
-  return row.productType.startsWith('motor-') || stageSeriesFor(row.palletFamily) !== null;
+  const series = stageSeriesFor(row.palletFamily);
+  return row.productType.startsWith('motor-') || (series !== null && hasStageWeight(series));
 }
 
 // Quantity is a whole number of boxes. A decimal is kept as typed (not silently
@@ -208,26 +216,33 @@ export function isComplete(row: OrderItem): boolean {
 interface ImportResult {
   rows: OrderItem[];
   skipped: string[];
+  needsWeight: string[];  // imported lines whose gross weight must be typed in
 }
 
 // Builds lines from imported (code, qty) pairs exactly as if each code had been
 // pasted into a new line. A line whose box can't be filled from its code, or
-// whose quantity isn't a whole number above 0, is skipped with a reason.
+// whose quantity isn't a whole number above 0, is skipped with a reason. A line
+// whose box is filled but whose series has no weight data (SK02, SK03, SK05) is
+// imported and listed, so its gross weight can be typed in.
 function linesFromImport(entries: { code: string; qty: number; sheetRow: number }[]): ImportResult {
   const rows: OrderItem[] = [];
   const skipped: string[] = [];
+  const needsWeight: string[] = [];
   for (const { code, qty, sheetRow } of entries) {
     const row = { ...emptyRow(), productCode: code, quantity: qty } as OrderItem;
     const parsed = parseItemCode(row) ?? row;
     if (!Number.isInteger(qty) || qty <= 0) {
       skipped.push(`Row ${sheetRow}: ${code} — quantity "${qty}" isn't a whole number above 0`);
+    } else if (!isComplete(parsed) && parsed.boxLengthMm > 0 && parsed.grossWeightKg <= 0) {
+      rows.push(parsed);
+      needsWeight.push(`Row ${sheetRow}: ${code}`);
     } else if (!isComplete(parsed)) {
       skipped.push(`Row ${sheetRow}: ${code} — ${codeWarning(parsed) ?? 'not recognised'}`);
     } else {
       rows.push(parsed);
     }
   }
-  return { rows, skipped };
+  return { rows, skipped, needsWeight };
 }
 
 interface ImportSheet {
@@ -379,7 +394,7 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
   // Excel import: imported lines replace blank lines and are added after the rest
   const fileInput = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
-  const [importNotice, setImportNotice] = useState<{ added: number; skipped: string[]; error?: string } | null>(null);
+  const [importNotice, setImportNotice] = useState<{ added: number; skipped: string[]; needsWeight: string[]; error?: string } | null>(null);
 
   async function importFile(file: File) {
     setImporting(true);
@@ -390,13 +405,13 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
         ...(sheet.customerName && { customerName: sheet.customerName }),
         ...(sheet.orderRef && { orderRef: sheet.orderRef }),
       });
-      const { rows: imported, skipped } = linesFromImport(sheet.entries);
+      const { rows: imported, skipped, needsWeight } = linesFromImport(sheet.entries);
       if (imported.length > 0) {
         commitRows([...rows.filter(r => r.productCode.trim() !== ''), ...imported]);
       }
-      setImportNotice({ added: imported.length, skipped });
+      setImportNotice({ added: imported.length, skipped, needsWeight });
     } catch (e) {
-      setImportNotice({ added: 0, skipped: [], error: e instanceof Error ? e.message : 'Could not read this file.' });
+      setImportNotice({ added: 0, skipped: [], needsWeight: [], error: e instanceof Error ? e.message : 'Could not read this file.' });
     } finally {
       setImporting(false);
     }
@@ -445,7 +460,7 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
           className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
             importNotice.error || importNotice.added === 0
               ? 'border-red-200 bg-red-50 text-red-700'
-              : importNotice.skipped.length > 0
+              : importNotice.skipped.length > 0 || importNotice.needsWeight.length > 0
                 ? 'border-amber-200 bg-amber-50 text-amber-800'
                 : 'border-green-200 bg-green-50 text-green-700'
           }`}
@@ -455,12 +470,18 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
               {importNotice.error
                 ? `Import failed: ${importNotice.error}`
                 : `${importNotice.added} item${importNotice.added === 1 ? '' : 's'} imported successfully` +
+                  (importNotice.needsWeight.length > 0 ? ` · ${importNotice.needsWeight.length} need gross weight` : '') +
                   (importNotice.skipped.length > 0 ? ` · ${importNotice.skipped.length} skipped` : '')}
             </p>
             <button onClick={() => setImportNotice(null)} aria-label="Dismiss" className="opacity-60 hover:opacity-100">
               <X size={14} />
             </button>
           </div>
+          {importNotice.needsWeight.length > 0 && (
+            <p className="mt-1 text-xs">
+              No weight data yet — type the gross kg/box for: {importNotice.needsWeight.join(', ')}
+            </p>
+          )}
           {importNotice.skipped.length > 0 && (
             <ul className="mt-1 list-disc pl-5 text-xs space-y-0.5">
               {importNotice.skipped.map((s, i) => <li key={i}>{s}</li>)}
@@ -553,7 +574,9 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
               }
               if (series && field === 'boxWidthMm') {
                 const filled = row.boxLengthMm > 0;
-                const summary = `${row.boxLengthMm} × ${row.boxWidthMm} × ${row.boxHeightMm} mm · ${row.netWeightKg} kg net`;
+                const summary = `${row.boxLengthMm} × ${row.boxWidthMm} × ${row.boxHeightMm} mm · ${
+                  row.netWeightKg > 0 ? `${row.netWeightKg} kg net` : 'no weight data'
+                }`;
                 return (
                   <div key="stageBox" className="col-span-2 lg:col-span-3">
                     <label className={STAGE_LABEL}>Box from {series} stages (L × W × H · net/box)</label>
