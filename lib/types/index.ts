@@ -61,6 +61,13 @@ export interface CustomerSummary {
   palletCount: number;
 }
 
+// The pallets the engine assigned to one container of a split shipment
+export interface ContainerLoad {
+  palletIds: string[];
+  cbm: number;
+  grossKg: number;
+}
+
 export interface ShipmentResult {
   pallets: PalletPlan[];
   placed?: PlacedPallet[];
@@ -70,4 +77,5 @@ export interface ShipmentResult {
   containerRecommendation: 'LCL' | 'FCL_20FT' | 'FCL_40FT' | 'MULTI_CONTAINER';
   warnings: string[];
   containersNeeded?: number;
+  containerLoads?: ContainerLoad[];  // only for MULTI_CONTAINER; the first is the drawn floor plan
 }

@@ -5,7 +5,7 @@ export type { PlacedPallet };
 export const CONTAINERS = {
   LCL:      { LENGTH: 0,     WIDTH: 2352, HEIGHT: 2393 },
   FCL_20FT: { LENGTH: 5898,  WIDTH: 2352, HEIGHT: 2393 },
-  FCL_40FT: { LENGTH: 11998, WIDTH: 2352, HEIGHT: 2393 },
+  FCL_40FT: { LENGTH: 12032, WIDTH: 2352, HEIGHT: 2393 },
 };
 
 // One footprint on the container floor: a single pallet, or a stacked pair
@@ -14,7 +14,7 @@ export interface FloorUnit {
   pallet: PalletPlan;
   stackedPallet?: PalletPlan;
   lengthMm: number; // longer of the two when stacked
-  widthMm: number;  // stacked pallets always share a width
+  widthMm: number;  // the bottom pallet's; a top pallet is never wider
 }
 
 // Group pallets into floor footprints using the stack pairing set by the engine.

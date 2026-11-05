@@ -112,7 +112,8 @@ export default function ContainerFloorPlan({ pallets, recommendation, placed: sa
   const selectedPartner = selectedPallet?.stackedWith
     ? pallets.find(p => p.palletId === selectedPallet.stackedWith)
     : undefined;
-  const totalCBM = pallets.reduce((s, p) => s + p.cbm, 0);
+  // Only what this container holds: a split shipment draws its first container
+  const totalCBM = placed.reduce((s, p) => s + p.pallet.cbm + (p.stackedPallet?.cbm ?? 0), 0);
   const maxCBM = container.LENGTH * C_WIDTH_MM * container.HEIGHT / 1e9;
   const utilPct = Math.min(100, (totalCBM / maxCBM) * 100);
 

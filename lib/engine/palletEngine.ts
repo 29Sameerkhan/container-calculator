@@ -1,11 +1,11 @@
 import {
   OrderItem,
   PalletPlan,
+  PlacedPallet,
   ShipmentResult,
 } from '@/lib/types';
 import {
   CONTAINERS,
-  CONTAINER_LENGTH_MM,
   PUMP_PALLET_WIDTH,
   MOTOR_PALLET_WIDTH,
   WOOD_WEIGHT,
@@ -17,10 +17,16 @@ import {
 } from '@/lib/constants';
 import { packPallets } from '@/lib/engine/floorPlan';
 
-// Stacked pair limits: forklift clearance (not the full container height) and
-// the forklift's lifting capacity
+// Container inner dimensions (mm)
+export const CONTAINER_INNER_20FT = { lengthMm: 5898, widthMm: 2352, heightMm: 2393 };
+export const CONTAINER_INNER_40FT = { lengthMm: 12032, widthMm: 2352, heightMm: 2393 };
+export const CONTAINER_INNER_40HC = { lengthMm: 12032, widthMm: 2352, heightMm: 2698 };
+
+// Stacked pair height cap, pending the loading team's forklift clearance check
 const MAX_STACKED_HEIGHT_MM = 2200;
-const MAX_STACKED_GROSS_KG = 1500;
+
+// Pumps share a pallet only if their tube lengths are within this of each other
+const TUBE_LENGTH_TOLERANCE_MM = 50;
 
 function isMotor(item: OrderItem): boolean {
   return item.productType.startsWith('motor-');
@@ -142,7 +148,25 @@ function consolidationKey(item: OrderItem): string {
   const palletWidthMm = resolvePalletWidth(item);
   const customer = item.customer ?? 'default';
   const category = isMotor(item) ? `motor-${item.productType}` : 'pump';
-  return `${customer}::${category}::w${palletWidthMm}`;
+  const key = `${customer}::${category}::w${palletWidthMm}`;
+  // Different tube faces don't stack cleanly, even on the same pallet width
+  return item.productType === 'pump' ? `${key}::f${item.boxWidthMm}x${item.boxHeightMm}` : key;
+}
+
+// Splits items into runs of similar tube length, longest first. Each run spans at
+// most the tolerance, so every pair in it is within the tolerance of each other.
+function splitByTubeLength(items: OrderItem[]): OrderItem[][] {
+  const runs: OrderItem[][] = [];
+  for (const item of [...items].sort((a, b) => b.boxLengthMm - a.boxLengthMm)) {
+    const run = runs[runs.length - 1];
+    if (run && run[0].boxLengthMm - item.boxLengthMm <= TUBE_LENGTH_TOLERANCE_MM) run.push(item);
+    else runs.push([item]);
+  }
+  return runs;
+}
+
+function groupGrossKg(items: OrderItem[]): number {
+  return items.reduce((sum, i) => sum + i.grossWeightKg * i.quantity, 0);
 }
 
 function buildPumpPallets(
@@ -151,11 +175,12 @@ function buildPumpPallets(
 ): PalletPlan[] {
   const MAX_PUMP_BOXES_PER_PALLET = 30;
   const pallets: PalletPlan[] = [];
-  const sorted = [...items].sort((a, b) => b.quantity - a.quantity);
+  // Heaviest box first
+  const sorted = [...items].sort((a, b) => b.grossWeightKg - a.grossWeightKg);
   const remaining = new Map<string, number>(
     sorted.map(item => [item.productCode, item.quantity])
   );
-  // The 1500kg limit is for the whole pallet, wood included
+  // The pallet weight limit is for the whole pallet, wood included
   const woodReserveKg = Math.max(...items.map(i => resolveWoodWeight(i, true)));
 
   while (true) {
@@ -237,7 +262,7 @@ function buildMotorPallets(
     items.map(item => [item.productCode, item.quantity])
   );
   const sorted = [...items].sort((a, b) => b.quantity - a.quantity);
-  // The 1500kg limit is for the whole pallet, wood included
+  // The pallet weight limit is for the whole pallet, wood included
   const woodReserveKg = Math.max(...items.map(i => resolveWoodWeight(i, true)));
 
   while (true) {
@@ -337,7 +362,12 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
     groups.get(key)!.push(item);
   }
 
-  for (const groupItems of Array.from(groups.values())) {
+  const finalGroups = Array.from(groups.values())
+    .flatMap(g => (g[0].productType === 'pump' ? splitByTubeLength(g) : [g]))
+    // Heaviest group first, so the biggest pumps are placed before smaller ones
+    .sort((a, b) => groupGrossKg(b) - groupGrossKg(a));
+
+  for (const groupItems of finalGroups) {
     const firstItem = groupItems[0];
     if (isMotor(firstItem)) {
       pallets.push(...buildMotorPallets(groupItems, palletCounter));
@@ -357,7 +387,8 @@ function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
     top.widthMm <= bottom.widthMm &&                                   //   bottom footprint
     bottom.totalGrossKg >= top.totalGrossKg &&                         // heavier on the bottom
     bottom.heightMm + top.heightMm <= MAX_STACKED_HEIGHT_MM &&         // forklift clearance
-    bottom.totalGrossKg + top.totalGrossKg <= MAX_STACKED_GROSS_KG &&  // forklift capacity
+    bottom.totalGrossKg <= MAX_PALLET_GROSS_KG &&                      // each pallet within its
+    top.totalGrossKg <= MAX_PALLET_GROSS_KG &&                         //   own weight limit
     (bottom.customer ?? '') === (top.customer ?? '')                   // consignees kept apart
   );
 }
@@ -365,11 +396,14 @@ function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
 // Pairs pallets two-high. Heaviest pallets are tried as bottoms first; each
 // takes the best top that passes canStack: same family first, then the one
 // saving the most floor. A pallet is in at most one stack (no triple stacking).
-export function stackPallets(pallets: PalletPlan[]): PalletPlan[] {
+// Stops after maxPairs pairs.
+export function stackPallets(pallets: PalletPlan[], maxPairs = Infinity): PalletPlan[] {
   const byWeight = [...pallets].sort((a, b) => b.totalGrossKg - a.totalGrossKg);
   const partner = new Map<string, { id: string; position: 'bottom' | 'top' }>();
+  let pairs = 0;
 
   for (const bottom of byWeight) {
+    if (pairs >= maxPairs) break;
     if (partner.has(bottom.palletId)) continue;
     let best: PalletPlan | null = null;
     for (const top of byWeight) {
@@ -383,6 +417,7 @@ export function stackPallets(pallets: PalletPlan[]): PalletPlan[] {
     if (!best) continue;
     partner.set(bottom.palletId, { id: best.palletId, position: 'bottom' });
     partner.set(best.palletId, { id: bottom.palletId, position: 'top' });
+    pairs++;
   }
 
   return pallets.map(p => {
@@ -395,6 +430,63 @@ function fitsFloor(pallets: PalletPlan[], containerLength: number): boolean {
   return packPallets(pallets, containerLength).every(p => !p.overflow);
 }
 
+const FCL_OPTIONS = [
+  { key: 'FCL_20FT', label: '20ft', inner: CONTAINER_INNER_20FT, limits: CONTAINERS.FCL_20FT },
+  { key: 'FCL_40FT', label: '40ft', inner: CONTAINER_INNER_40FT, limits: CONTAINERS.FCL_40FT },
+] as const;
+type FclOption = (typeof FCL_OPTIONS)[number];
+
+function stackedPairCount(pallets: PalletPlan[]): number {
+  return pallets.filter(p => p.stackPosition === 'bottom').length;
+}
+
+// The pallets as they load into this container: flat if the floor holds them,
+// otherwise with only as many stacked pairs as the floor needs. Null when the
+// container is disqualified.
+function fitContainer(
+  built: PalletPlan[],
+  option: FclOption,
+  totalCBM: number,
+  totalGrossKg: number,
+): PalletPlan[] | null {
+  if (built.some(p => p.lengthMm > option.inner.lengthMm)) return null;
+  if (totalCBM > option.limits.maxCBM || totalGrossKg > option.limits.maxPayloadKg) return null;
+  if (fitsFloor(built, option.inner.lengthMm)) return built;
+  const possiblePairs = stackedPairCount(stackPallets(built));
+  for (let pairs = 1; pairs <= possiblePairs; pairs++) {
+    const stacked = stackPallets(built, pairs);
+    if (fitsFloor(stacked, option.inner.lengthMm)) return stacked;
+  }
+  return null;
+}
+
+// Fills 40ft containers one at a time, each within its floor, CBM and payload
+// limits. Every pallet passed in must fit a 40ft on its own.
+function loadInto40ftContainers(pallets: PalletPlan[]): PlacedPallet[][] {
+  const { inner, limits } = FCL_OPTIONS[1];
+  const loads: PlacedPallet[][] = [];
+  let remaining = pallets;
+  while (remaining.length > 0) {
+    const load: PlacedPallet[] = [];
+    let cbm = 0;
+    let grossKg = 0;
+    for (const placed of packPallets(remaining, inner.lengthMm)) {
+      const unit = placed.stackedPallet ? [placed.pallet, placed.stackedPallet] : [placed.pallet];
+      const unitCbm = unit.reduce((s, p) => s + p.cbm, 0);
+      const unitKg = unit.reduce((s, p) => s + p.totalGrossKg, 0);
+      const overLimit = load.length > 0 && (cbm + unitCbm > limits.maxCBM || grossKg + unitKg > limits.maxPayloadKg);
+      if (placed.overflow || overLimit) break;
+      load.push(placed);
+      cbm += unitCbm;
+      grossKg += unitKg;
+    }
+    loads.push(load);
+    const loaded = new Set(load.flatMap(p => [p.pallet.palletId, p.stackedPallet?.palletId]));
+    remaining = remaining.filter(p => !loaded.has(p.palletId));
+  }
+  return loads;
+}
+
 export function computeShipment(items: OrderItem[]): ShipmentResult {
   // Pallets start unstacked; stacking is used only if the floor needs it
   const built = buildPalletPlans(items);
@@ -402,41 +494,53 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
   const warnings: string[] = [];
   const totalCBM = pallets.reduce((sum, p) => sum + p.cbm, 0);
   const totalGrossKg = pallets.reduce((sum, p) => sum + p.totalGrossKg, 0);
-  const requires40ft = pallets.some((p) => p.lengthMm > CONTAINER_LENGTH_MM.FCL_20FT);
 
   pallets.forEach((p) => {
     if (p.heightMm > MAX_STACK_HEIGHT_MM) {
       warnings.push(`${p.palletId}: height ${p.heightMm}mm exceeds max stack height ${MAX_STACK_HEIGHT_MM}mm`);
     }
-    if (p.lengthMm > CONTAINER_LENGTH_MM.FCL_20FT) {
+    if (p.lengthMm > CONTAINER_INNER_40FT.lengthMm) {
+      warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds 40ft inner length — no container fits it, arrange this pallet separately`);
+    } else if (p.lengthMm > CONTAINER_INNER_20FT.lengthMm) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds 20ft internal length — requires 40ft container`);
     }
     if (p.lengthMm > MAX_PUMP_PALLET_LENGTH_MM) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds practical pallet limit (${MAX_PUMP_PALLET_LENGTH_MM}mm) — verify floor-plan with Mahendra`);
     }
-    if (p.totalGrossKg > MAX_PALLET_GROSS_KG + (p.woodWeightKg ?? 0)) {
+    if (p.totalGrossKg > MAX_PALLET_GROSS_KG) {
       warnings.push(`${p.palletId}: gross weight ${p.totalGrossKg}kg — verify forklift capacity`);
     }
   });
 
-  // Container decision order: 20ft flat → 20ft stacked → 40ft flat →
-  // 40ft stacked → multiple containers. Each size must also pass its CBM and
-  // payload limits; a pallet longer than a 20ft rules the 20ft out.
+  // Container decision order: 20ft flat → 20ft stacked → 40ft flat → 40ft stacked
+  // → multiple containers. The first size whose floor, CBM and payload all hold wins.
+  let chosen: FclOption | null = null;
+  let chosenPallets: PalletPlan[] | null = null;
+  for (const option of FCL_OPTIONS) {
+    chosenPallets = fitContainer(built, option, totalCBM, totalGrossKg);
+    if (chosenPallets) {
+      chosen = option;
+      break;
+    }
+  }
+
+  // LCL rules look at pallet length, CBM and payload only, not the floor
+  const allows20ft =
+    built.every(p => p.lengthMm <= CONTAINER_INNER_20FT.lengthMm) &&
+    totalCBM <= CONTAINERS.FCL_20FT.maxCBM &&
+    totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg;
+
   let containerRecommendation: ShipmentResult['containerRecommendation'];
   let containersNeeded: number | undefined;
-  const len20 = CONTAINER_LENGTH_MM.FCL_20FT;
-  const len40 = CONTAINER_LENGTH_MM.FCL_40FT;
-  const allows20ft = !requires40ft && totalCBM <= CONTAINERS.FCL_20FT.maxCBM && totalGrossKg <= CONTAINERS.FCL_20FT.maxPayloadKg;
-  const allows40ft = totalCBM <= CONTAINERS.FCL_40FT.maxCBM && totalGrossKg <= CONTAINERS.FCL_40FT.maxPayloadKg;
-  const stacked = stackPallets(built);
-  const applyStacking = (size: string) => {
-    pallets = stacked;
-    const pairs = stacked.filter(p => p.stackPosition === 'bottom').length;
-    warnings.push(`${pairs} stacked pair${pairs === 1 ? '' : 's'} needed to fit a ${size} — pallets stacked two-high, confirm with Mahendra before loading`);
+  let containerLoads: ShipmentResult['containerLoads'];
+  let placed: PlacedPallet[] = [];
+  const warnStackedPairs = (size: string) => {
+    const pairs = stackedPairCount(pallets);
+    if (pairs > 0) {
+      warnings.push(`${pairs} stacked pair${pairs === 1 ? '' : 's'} needed to fit a ${size} — pallets stacked two-high, confirm with Mahendra before loading`);
+    }
   };
 
-  // LCL for a single small pallet, or for any load that fits a 20ft but is too
-  // light to be worth a full container
   if (built.length <= 1 && totalCBM < 2.0) {
     containerRecommendation = 'LCL';
     warnings.push('LCL recommended — volume too small for FCL. Consolidation charges will apply.');
@@ -444,59 +548,51 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
     containerRecommendation = 'LCL';
     warnings.push(
       `LCL recommended — total gross weight ${Math.round(totalGrossKg).toLocaleString('en-US')} kg is under ` +
-      `${LCL_SUGGEST_BELOW_KG.toLocaleString('en-US')} kg. If booked as FCL instead, it fits a 20ft container.`
+      `${LCL_SUGGEST_BELOW_KG.toLocaleString('en-US')} kg. If booked as FCL instead, ` +
+      (chosen ? `it fits a ${chosen.label} container.` : 'it needs more than one 40ft container.')
     );
-  } else if (allows20ft) {
-    containerRecommendation = 'FCL_20FT';
-  } else if (allows40ft) {
-    containerRecommendation = 'FCL_40FT';
+  } else if (chosen && chosenPallets) {
+    containerRecommendation = chosen.key;
+    pallets = chosenPallets;
+    placed = packPallets(pallets, chosen.inner.lengthMm);
+    warnStackedPairs(chosen.label);
+    const payloadUse = totalGrossKg / chosen.limits.maxPayloadKg;
+    if (payloadUse > 0.9) {
+      warnings.push(`${chosen.label} payload at ${(payloadUse * 100).toFixed(0)}% — approaching limit`);
+    }
   } else {
     containerRecommendation = 'MULTI_CONTAINER';
-    pallets = stacked;
+    // A pallet too long for any container can't join a load or a stack
+    const loadable = built.filter(p => p.lengthMm <= CONTAINER_INNER_40FT.lengthMm);
+    const tooLong = built.filter(p => p.lengthMm > CONTAINER_INNER_40FT.lengthMm);
+    // Fewest stacked pairs that still reach the lowest container count
+    const lowestCount = loadInto40ftContainers(stackPallets(loadable)).length;
+    let stacked = loadable;
+    let loads = loadInto40ftContainers(stacked);
+    for (let pairs = 1; loads.length > lowestCount; pairs++) {
+      stacked = stackPallets(loadable, pairs);
+      loads = loadInto40ftContainers(stacked);
+    }
+    pallets = [...stacked, ...tooLong];
+    // Only the first container is drawn; the floor plan labels it as such
+    placed = loads[0] ?? [];
+    containerLoads = loads.map(load => {
+      const loaded = load.flatMap(p => (p.stackedPallet ? [p.pallet, p.stackedPallet] : [p.pallet]));
+      return {
+        palletIds: loaded.map(p => p.palletId),
+        cbm: Math.round(loaded.reduce((sum, p) => sum + p.cbm, 0) * 1000) / 1000,
+        grossKg: Math.round(loaded.reduce((sum, p) => sum + p.totalGrossKg, 0) * 10) / 10,
+      };
+    });
     const containersByVolume = Math.ceil(totalCBM / CONTAINERS.FCL_40FT.maxCBM);
     const containersByWeight = Math.ceil(totalGrossKg / CONTAINERS.FCL_40FT.maxPayloadKg);
-    containersNeeded = Math.max(containersByVolume, containersByWeight);
-    const limitingFactor = containersByWeight > containersByVolume ? 'weight' : 'volume';
+    containersNeeded = Math.max(loads.length, 1);
+    const limitingFactor = loads.length > Math.max(containersByVolume, containersByWeight)
+      ? 'floor space'
+      : containersByWeight > containersByVolume ? 'weight' : 'volume';
     warnings.push(`Requires ~${containersNeeded} × 40ft FCL — limited by ${limitingFactor}.`);
+    warnStackedPairs('40ft');
   }
-
-  // The container is chosen by CBM, payload and pallet length only (the strip
-  // packer is simpler than a real loading plan). If the drawn floor plan doesn't
-  // fit flat, safe stacks are used to tighten it and the plan is flagged.
-  if (containerRecommendation === 'FCL_20FT' || containerRecommendation === 'FCL_40FT') {
-    const length = containerRecommendation === 'FCL_20FT' ? len20 : len40;
-    const size = containerRecommendation === 'FCL_20FT' ? '20ft' : '40ft';
-    if (!fitsFloor(built, length)) {
-      if (fitsFloor(stacked, length)) {
-        applyStacking(size);
-      } else {
-        const overflowOf = (ps: PalletPlan[]) => packPallets(ps, length).filter(p => p.overflow).length;
-        const useStacks = overflowOf(stacked) < overflowOf(built);
-        if (useStacks) pallets = stacked;
-        const pairs = stacked.filter(p => p.stackPosition === 'bottom').length;
-        warnings.push(
-          `Floor plan is approximate — the auto layout doesn't fit every pallet on a ${size} floor` +
-          (useStacks ? ` even with ${pairs} safe stacked pair${pairs === 1 ? '' : 's'}` : '') +
-          '. Confirm the loading plan with Mahendra.'
-        );
-      }
-    }
-  }
-
-  if (containerRecommendation === 'FCL_20FT') {
-    const u = totalGrossKg / CONTAINERS.FCL_20FT.maxPayloadKg;
-    if (u > 0.9) warnings.push(`20ft payload at ${(u * 100).toFixed(0)}% — approaching limit`);
-  }
-  if (containerRecommendation === 'FCL_40FT') {
-    const u = totalGrossKg / CONTAINERS.FCL_40FT.maxPayloadKg;
-    if (u > 0.9) warnings.push(`40ft payload at ${(u * 100).toFixed(0)}% — approaching limit`);
-  }
-
-  // Floor positions in the recommended container, saved with the result so
-  // a reloaded calculation draws exactly this plan
-  const placed = containerRecommendation === 'LCL'
-    ? []
-    : packPallets(pallets, containerRecommendation === 'FCL_20FT' ? len20 : len40);
 
   return {
     pallets,
@@ -505,6 +601,7 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
     totalGrossKg: Math.round(totalGrossKg * 10) / 10,
     containerRecommendation,
     ...(containersNeeded !== undefined && { containersNeeded }),
+    ...(containerLoads !== undefined && { containerLoads }),
     warnings,
   };
 }

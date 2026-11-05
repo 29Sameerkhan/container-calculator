@@ -38,12 +38,8 @@ export const MAX_STACK_HEIGHT_MM = 2350;
 // Wooden pallet base height (mm), added on top of stacked box height
 export const PALLET_BASE_HEIGHT_MM = 120;
 
-// Container internal lengths (mm)
-export const CONTAINER_LENGTH_MM = { FCL_20FT: 5898, FCL_40FT: 11998 };
-
-// Max gross weight per pallet (kg) — safe working load for a standard 2-tonne counterbalance forklift.
-// 1,500 kg is conservative: accounts for height-lift penalties and off-centre load
-export const MAX_PALLET_GROSS_KG = 1500;
+// Max gross weight per pallet (kg), wood included — set by the loading team
+export const MAX_PALLET_GROSS_KG = 1000;
 export const MAX_PUMP_PALLET_LENGTH_MM = 3700;
 
 // Below this total gross weight (kg) LCL is suggested instead of a full container:
