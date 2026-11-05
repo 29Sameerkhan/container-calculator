@@ -156,11 +156,50 @@ function poolsWithinGap(a: PalletSku[], b: PalletSku[]): boolean {
   ));
 }
 
+// Whether these layers, bottom first, can make up one pallet of this width
+function fitsOnePallet(skus: PalletSku[], widthMm: number): boolean {
+  return (
+    skus.every((layer, i) => i === 0 || canSitOn(layer, skus[i - 1])) &&
+    palletGrossKg(skus) <= MAX_PALLET_GROSS_KG &&
+    layeredHeightMm(skus, widthMm) <= MAX_LAYERED_PALLET_HEIGHT_MM
+  );
+}
+
+// Divides a quantity as evenly as possible, larger shares first
+function evenShares(qty: number, parts: number): number[] {
+  return Array.from({ length: parts }, (_, i) => Math.floor(qty / parts) + (i < qty % parts ? 1 : 0));
+}
+
+// A product that has to split over several pallets can carry the next product
+// across all of them, when that product couldn't stay whole on the last pallet.
+// Both are spread evenly, which leaves each lower layer heavy enough to carry its
+// share. Returns the pallets, or null if the normal fill should be used instead.
+function shareSplitPallets(
+  lower: PalletSku,
+  upper: PalletSku,
+  pallets: number,
+  fullPalletQty: number,
+): PalletSku[][] | null {
+  const widthMm = Math.max(resolvePalletWidth(lower.item), resolvePalletWidth(upper.item));
+  if (!poolsWithinGap([lower], [upper])) return null;
+  const leftover = { item: lower.item, qty: lower.qty - (pallets - 1) * fullPalletQty };
+  if (fitsOnePallet([leftover, upper], widthMm)) return null;
+
+  const lowerShares = evenShares(lower.qty, pallets);
+  const upperShares = evenShares(upper.qty, pallets);
+  const shared = lowerShares.map((qty, i) => [
+    { item: lower.item, qty },
+    ...(upperShares[i] > 0 ? [{ item: upper.item, qty: upperShares[i] }] : []),
+  ]);
+  return shared.every(skus => fitsOnePallet(skus, widthMm)) ? shared : null;
+}
+
 // Fills pallets from one pool, longest tube first. Each product is a layer on top
 // of the last, and a pallet is as wide as the widest product's pallet width on it.
 // A product whose full quantity fits one pallet stays together, on a new pallet if
 // it won't fit this one. A product too big for one pallet tops up this pallet only
-// if that doesn't put it on an extra pallet.
+// if that doesn't put it on an extra pallet, and may share its pallets with a
+// shorter product (see shareSplitPallets).
 function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
   const drafts: PalletDraft[] = [];
   const sorted = [...items].sort((a, b) =>
@@ -179,7 +218,10 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
     palletWidthMm = 0;
   };
 
-  for (const item of sorted) {
+  const sharedAway = new Set<OrderItem>();
+
+  sorted.forEach((item, index) => {
+    if (sharedAway.has(item)) return;
     const itemWidthMm = resolvePalletWidth(item);
     const boxesFitting = (usedKg: number, usedHeightMm: number, widthMm: number) => Math.min(
       Math.floor((MAX_PALLET_GROSS_KG - woodReserveKg - usedKg) / item.grossWeightKg),
@@ -191,6 +233,23 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
     let remaining = item.quantity;
 
     while (remaining > 0) {
+      if (skus.length === 0 && remaining > onNewPallet) {
+        const lower = { item, qty: remaining };
+        const pallets = Math.ceil(remaining / onNewPallet);
+        const upper = sorted.slice(index + 1).find(i => !sharedAway.has(i));
+        const shared = upper && shareSplitPallets(lower, { item: upper, qty: upper.quantity }, pallets, onNewPallet);
+        if (upper && shared) {
+          sharedAway.add(upper);
+          const palletWidth = Math.max(itemWidthMm, resolvePalletWidth(upper));
+          shared.slice(0, -1).forEach(p => drafts.push({ skus: p, widthMm: palletWidth, motorOnly: false }));
+          // The last pallet stays open for more layers
+          skus = shared[shared.length - 1];
+          grossKg = boxesGrossKg(skus);
+          palletWidthMm = palletWidth;
+          remaining = 0;
+          break;
+        }
+      }
       let qty = Math.min(remaining, onNewPallet);
       let widthMm = itemWidthMm;
       if (skus.length > 0) {
@@ -217,7 +276,7 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
       remaining -= qty;
       if (remaining > 0) closePallet();
     }
-  }
+  });
   if (skus.length > 0) closePallet();
   return drafts;
 }
@@ -271,12 +330,7 @@ function isPumpDraft(d: PalletDraft): boolean {
 
 // Whether another pallet's boxes fit as new layers on top of this one
 function canAbsorb(host: PalletDraft, guestSkus: PalletSku[], widthMm: number): boolean {
-  const combined = [...host.skus, ...guestSkus];
-  return (
-    combined.every((layer, i) => i === 0 || canSitOn(layer, combined[i - 1])) &&
-    palletGrossKg(combined) <= MAX_PALLET_GROSS_KG &&
-    layeredHeightMm(combined, widthMm) <= MAX_LAYERED_PALLET_HEIGHT_MM
-  );
+  return fitsOnePallet([...host.skus, ...guestSkus], widthMm);
 }
 
 // A pump pallet goes on top of another pump pallet, including one from another
