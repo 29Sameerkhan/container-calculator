@@ -1,5 +1,6 @@
 'use client';
 
+import { Fragment } from 'react';
 import { PalletPlan } from '@/lib/types';
 import { toFloorUnits } from '@/lib/engine/floorPlan';
 
@@ -65,7 +66,8 @@ export default function PalletPlanTable({ pallets }: Props) {
               const families = Array.from(new Set(parts.map(x => x.family)));
 
               return (
-                <tr key={p.palletId} className={`hover:bg-gray-50 transition-colors ${top ? 'bg-amber-50/40' : ''}`}>
+                <Fragment key={p.palletId}>
+                <tr className={`hover:bg-gray-50 transition-colors ${top ? 'bg-amber-50/40' : ''}`}>
                   <td className="py-2.5 pr-4 font-mono text-xs font-semibold text-gray-700 whitespace-nowrap">
                     {top ? `${p.palletId} + ${top.palletId}` : p.palletId}
                     {top && (
@@ -103,6 +105,21 @@ export default function PalletPlanTable({ pallets }: Props) {
                   <td className="py-2.5 pr-4 text-right text-xs text-gray-500">{sum(x => x.woodWeightKg)}</td>
                   <td className="py-2.5 text-right font-semibold text-xs">{(Math.round(sum(x => x.totalGrossKg) * 10) / 10).toLocaleString()}</td>
                 </tr>
+                {/* One sub-row per layer of a multi-product pallet, bottom layer first */}
+                {parts.filter(x => (x.layers?.length ?? 0) > 1).flatMap(x => (x.layers ?? []).map((layer, i) => (
+                  <tr key={`${x.palletId}-${i}`} className="bg-gray-50/70 text-xs text-gray-500">
+                    <td className="py-1 pl-4 pr-4 whitespace-nowrap" colSpan={showCustomer ? 2 : 1}>
+                      {top ? `${x.palletId} · ` : ''}Layer {i + 1}{i === 0 ? ' (bottom)' : ''}
+                    </td>
+                    <td className="py-1 pr-4" colSpan={2}>{layer.productCode}</td>
+                    <td className="py-1 pr-4 text-right">{layer.quantity}</td>
+                    <td className="py-1 pr-4 text-right whitespace-nowrap" colSpan={4}>
+                      {layer.lengthMm.toLocaleString()} long · {layer.boxesAcross} across · {layer.rows} row{layer.rows > 1 ? 's' : ''} · {layer.heightMm} high
+                    </td>
+                    <td className="py-1 text-right">{layer.grossWeightKg.toLocaleString()}</td>
+                  </tr>
+                )))}
+                </Fragment>
               );
             })}
           </tbody>

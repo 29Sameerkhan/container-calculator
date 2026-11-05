@@ -19,6 +19,18 @@ export interface ShipmentOrder {
   items: OrderItem[];
 }
 
+// One product on a layered pallet. Boxes lie along the pallet length in rows,
+// so a layer is as high as its rows.
+export interface PalletLayer {
+  productCode: string;
+  quantity: number;
+  boxesAcross: number;
+  rows: number;
+  lengthMm: number;
+  heightMm: number;
+  grossWeightKg: number;
+}
+
 export interface PalletPlan {
   palletId: string;
   customerName?: string;   // optional — not always set by engine
@@ -28,6 +40,7 @@ export interface PalletPlan {
   productCodes: string[];
   quantity: number;
   skuBreakdown?: Array<{ productCode: string; quantity: number; netWeightKg: number; grossWeightKg: number }>;
+  layers?: PalletLayer[];  // bottom first; absent on motor-only pallets and older saved results
   lengthMm: number;
   widthMm: number;
   heightMm: number;
