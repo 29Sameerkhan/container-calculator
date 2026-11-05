@@ -30,6 +30,9 @@ const MAX_STACKED_HEIGHT_MM = 2200;
 const MAX_LAYERED_PALLET_HEIGHT_MM = 2200;
 const MAX_MOTORS_PER_PALLET = 24;
 
+// Pumps from different pools share a pallet only if their pool widths are this close
+const MAX_CROSS_POOL_WIDTH_GAP_MM = 100;
+
 function isMotor(item: OrderItem): boolean {
   return item.productType.startsWith('motor-');
 }
@@ -146,6 +149,13 @@ function canSitOn(layer: PalletSku, below: PalletSku): boolean {
   );
 }
 
+// Whether every pump in one group may share a pallet with every pump in the other
+function poolsWithinGap(a: PalletSku[], b: PalletSku[]): boolean {
+  return a.every(x => b.every(y =>
+    Math.abs(resolvePalletWidth(x.item) - resolvePalletWidth(y.item)) <= MAX_CROSS_POOL_WIDTH_GAP_MM
+  ));
+}
+
 // Fills pallets from one pool, longest tube first. Each product is a layer on top
 // of the last, and a pallet is as wide as the widest product's pallet width on it.
 // A product whose full quantity fits one pallet stays together, on a new pallet if
@@ -186,7 +196,8 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
       if (skus.length > 0) {
         const below = skus[skus.length - 1];
         widthMm = Math.max(palletWidthMm, itemWidthMm);
-        const fits = item.boxWidthMm > below.item.boxWidthMm ? 0 : Math.min(
+        const blocked = item.boxWidthMm > below.item.boxWidthMm || !poolsWithinGap(skus, [{ item, qty: 1 }]);
+        const fits = blocked ? 0 : Math.min(
           boxesFitting(grossKg, layeredHeightMm(skus, widthMm), widthMm),
           Math.floor((below.item.grossWeightKg * below.qty) / item.grossWeightKg),
         );
@@ -280,6 +291,7 @@ function mergeSmallPumpPallets(drafts: PalletDraft[]): PalletDraft[] {
         d !== guest &&
         isPumpDraft(d) &&
         sameCustomer(d, guest) &&
+        poolsWithinGap(d.skus, guest.skus) &&
         canAbsorb(d, guest.skus, Math.max(d.widthMm, guest.widthMm))
       )
       .sort((a, b) => palletGrossKg(b.skus) - palletGrossKg(a.skus))[0];
