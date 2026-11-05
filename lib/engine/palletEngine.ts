@@ -124,11 +124,12 @@ function palletGrossKg(skus: PalletSku[]): number {
   return boxesGrossKg(skus) + woodKg(skus);
 }
 
+// Pumps with the same face size pool together whatever their pallet width
 function consolidationKey(item: OrderItem): string {
-  const palletWidthMm = resolvePalletWidth(item);
   const customer = item.customer ?? 'default';
+  if (item.productType === 'pump') return `${customer}::pump::f${item.boxWidthMm}x${item.boxHeightMm}`;
   const category = isMotor(item) ? `motor-${item.productType}` : 'pump';
-  return `${customer}::${category}::w${palletWidthMm}`;
+  return `${customer}::${category}::w${resolvePalletWidth(item)}`;
 }
 
 function groupGrossKg(items: OrderItem[]): number {
@@ -145,13 +146,13 @@ function canSitOn(layer: PalletSku, below: PalletSku): boolean {
   );
 }
 
-// Fills pallets from one pallet width pool, longest tube first. Each product is
-// a layer on top of the last. A product whose full quantity fits one pallet stays
-// together, on a new pallet if it won't fit this one. A product too big for one
-// pallet tops up this pallet only if that doesn't put it on an extra pallet.
+// Fills pallets from one pool, longest tube first. Each product is a layer on top
+// of the last, and a pallet is as wide as the widest product's pallet width on it.
+// A product whose full quantity fits one pallet stays together, on a new pallet if
+// it won't fit this one. A product too big for one pallet tops up this pallet only
+// if that doesn't put it on an extra pallet.
 function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
   const drafts: PalletDraft[] = [];
-  const widthMm = resolvePalletWidth(items[0]);
   const sorted = [...items].sort((a, b) =>
     b.boxLengthMm - a.boxLengthMm || b.grossWeightKg - a.grossWeightKg
   );
@@ -160,30 +161,33 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
 
   let skus: PalletSku[] = [];
   let grossKg = 0;
-  let heightMm = PALLET_BASE_HEIGHT_MM;
+  let palletWidthMm = 0;
   const closePallet = () => {
-    drafts.push({ skus, widthMm, motorOnly: false });
+    drafts.push({ skus, widthMm: palletWidthMm, motorOnly: false });
     skus = [];
     grossKg = 0;
-    heightMm = PALLET_BASE_HEIGHT_MM;
+    palletWidthMm = 0;
   };
 
   for (const item of sorted) {
-    const boxesAcross = Math.max(1, Math.floor(widthMm / item.boxWidthMm));
-    const boxesFitting = (usedKg: number, usedHeightMm: number) => Math.min(
+    const itemWidthMm = resolvePalletWidth(item);
+    const boxesFitting = (usedKg: number, usedHeightMm: number, widthMm: number) => Math.min(
       Math.floor((MAX_PALLET_GROSS_KG - woodReserveKg - usedKg) / item.grossWeightKg),
-      Math.floor((MAX_LAYERED_PALLET_HEIGHT_MM - usedHeightMm) / item.boxHeightMm) * boxesAcross,
+      Math.floor((MAX_LAYERED_PALLET_HEIGHT_MM - usedHeightMm) / item.boxHeightMm) *
+        Math.max(1, Math.floor(widthMm / item.boxWidthMm)),
     );
     // A single box over a limit still gets a pallet of its own
-    const onNewPallet = Math.max(1, boxesFitting(0, PALLET_BASE_HEIGHT_MM));
+    const onNewPallet = Math.max(1, boxesFitting(0, PALLET_BASE_HEIGHT_MM, itemWidthMm));
     let remaining = item.quantity;
 
     while (remaining > 0) {
       let qty = Math.min(remaining, onNewPallet);
+      let widthMm = itemWidthMm;
       if (skus.length > 0) {
         const below = skus[skus.length - 1];
+        widthMm = Math.max(palletWidthMm, itemWidthMm);
         const fits = item.boxWidthMm > below.item.boxWidthMm ? 0 : Math.min(
-          boxesFitting(grossKg, heightMm),
+          boxesFitting(grossKg, layeredHeightMm(skus, widthMm), widthMm),
           Math.floor((below.item.grossWeightKg * below.qty) / item.grossWeightKg),
         );
         const fitsWhole = remaining <= fits;
@@ -198,7 +202,7 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
       }
       skus.push({ item, qty });
       grossKg += qty * item.grossWeightKg;
-      heightMm += Math.ceil(qty / boxesAcross) * item.boxHeightMm;
+      palletWidthMm = widthMm;
       remaining -= qty;
       if (remaining > 0) closePallet();
     }
@@ -265,7 +269,7 @@ function canAbsorb(host: PalletDraft, guestSkus: PalletSku[], widthMm: number): 
 }
 
 // A pump pallet goes on top of another pump pallet, including one from another
-// width pool, when it fits. The merged pallet takes the wider of the two widths.
+// pool, when it fits. The merged pallet takes the wider of the two widths.
 function mergeSmallPumpPallets(drafts: PalletDraft[]): PalletDraft[] {
   let result = drafts;
   const longestFirst = [...drafts].sort((a, b) => longestBoxMm(b.skus) - longestBoxMm(a.skus));
