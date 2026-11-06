@@ -36,7 +36,7 @@ export const WOOD_WEIGHT = {
 export const MAX_STACK_HEIGHT_MM = 2350;
 
 // Wooden pallet base height (mm), added on top of stacked box height
-export const PALLET_BASE_HEIGHT_MM = 120;
+export const PALLET_BASE_HEIGHT_MM = 180;
 
 // Max gross weight per pallet (kg), wood included — set by the loading team
 export const MAX_PALLET_GROSS_KG = 1000;

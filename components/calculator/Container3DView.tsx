@@ -106,7 +106,11 @@ function fitDistance(size: { l: number; h: number; w: number }, dir: { x: number
 // out of each layer's height so the top still lands on the pallet's real height.
 // Motor pallets and older saved results have no layers, so draw as one block.
 function palletBoxes(pallet: PalletPlan, x: number, z: number, floorMm: number) {
-  const base = PALLET_BASE_HEIGHT_MM;
+  // A saved result keeps the base height it was calculated with, so read it from
+  // the pallet's own figures where they give it
+  const base = pallet.layers?.length
+    ? pallet.heightMm - pallet.layers.reduce((sum, l) => sum + l.heightMm, 0)
+    : PALLET_BASE_HEIGHT_MM;
   const parts: Array<Box & { wood: boolean }> = [
     { x, y: floorMm, z, l: pallet.lengthMm, h: base, w: pallet.widthMm, wood: true },
   ];

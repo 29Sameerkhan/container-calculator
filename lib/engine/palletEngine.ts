@@ -17,6 +17,7 @@ import {
   LCL_SUGGEST_BELOW_KG,
 } from '@/lib/constants';
 import { packPallets } from '@/lib/engine/floorPlan';
+import { normaliseProductCode } from '@/lib/engine/utils';
 
 // Container inner dimensions (mm)
 export const CONTAINER_INNER_20FT = { lengthMm: 5898, widthMm: 2352, heightMm: 2393 };
@@ -32,6 +33,10 @@ const MAX_MOTORS_PER_PALLET = 24;
 
 // Pumps from different pools share a pallet only if their pool widths are this close
 const MAX_CROSS_POOL_WIDTH_GAP_MM = 100;
+
+// Leftover clubbing (Mahendra's rule): small pallets of these two face sizes may share a pallet
+const CLUB_MAX_BOXES = 15;
+const CLUB_FACE_SIZES_MM = [100, 152];
 
 function isMotor(item: OrderItem): boolean {
   return item.productType.startsWith('motor-');
@@ -357,6 +362,57 @@ function mergeSmallPumpPallets(drafts: PalletDraft[]): PalletDraft[] {
   return result;
 }
 
+// The face size of a small pump pallet that may be clubbed, or null if it may not:
+// up to CLUB_MAX_BOXES boxes, all of one clubbing face size
+function clubFaceMm(d: PalletDraft): number | null {
+  if (!isPumpDraft(d) || boxCount(d.skus) > CLUB_MAX_BOXES) return null;
+  const { boxWidthMm, boxHeightMm } = d.skus[0].item;
+  const oneFace = boxWidthMm === boxHeightMm &&
+    d.skus.every(s => s.item.boxWidthMm === boxWidthMm && s.item.boxHeightMm === boxHeightMm);
+  return oneFace && CLUB_FACE_SIZES_MM.includes(boxWidthMm) ? boxWidthMm : null;
+}
+
+// Heavier pallet's boxes on the bottom; taller on the bottom if equally heavy
+function clubbedDraft(a: PalletDraft, b: PalletDraft): PalletDraft {
+  const widthMm = Math.max(a.widthMm, b.widthMm);
+  const aFirst =
+    boxesGrossKg(a.skus) - boxesGrossKg(b.skus) ||
+    layeredHeightMm(a.skus, widthMm) - layeredHeightMm(b.skus, widthMm);
+  const skus = aFirst >= 0 ? [...a.skus, ...b.skus] : [...b.skus, ...a.skus];
+  return { skus, widthMm, motorOnly: false };
+}
+
+// Mahendra's rule: after primary grouping, a small 100mm-face pallet and a small
+// 152mm-face pallet of one customer become one pallet if the result is within the
+// weight and height limits. Only those limits apply: these pools would not merge
+// under the layering rules in fitsOnePallet. Heaviest pallets are paired first, each
+// with the heaviest partner that fits; a clubbed pallet isn't clubbed again.
+function clubLeftovers(drafts: PalletDraft[]): PalletDraft[] {
+  const result = [...drafts];
+  const candidates = drafts
+    .filter(d => clubFaceMm(d) !== null)
+    .sort((a, b) => palletGrossKg(b.skus) - palletGrossKg(a.skus));
+  const used = new Set<PalletDraft>();
+
+  for (const a of candidates) {
+    if (used.has(a)) continue;
+    for (const b of candidates) {
+      if (used.has(b) || clubFaceMm(a) === clubFaceMm(b) || !sameCustomer(a, b)) continue;
+      const clubbed = clubbedDraft(a, b);
+      if (
+        palletGrossKg(clubbed.skus) > MAX_PALLET_GROSS_KG ||
+        layeredHeightMm(clubbed.skus, clubbed.widthMm) > MAX_LAYERED_PALLET_HEIGHT_MM
+      ) continue;
+      used.add(a);
+      used.add(b);
+      result[result.indexOf(a)] = clubbed;
+      result.splice(result.indexOf(b), 1);
+      break;
+    }
+  }
+  return result;
+}
+
 // Motor pallets go on top of a pump pallet when they fit. Returns the motor
 // pallets that still stand on their own.
 function mergeSmallMotorPallets(motors: PalletDraft[], pumps: PalletDraft[]): PalletDraft[] {
@@ -431,10 +487,12 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
   // quantity (other fields from its first line); kept apart per customer
   const merged = new Map<string, OrderItem>();
   for (const item of items) {
-    const key = `${item.customer ?? 'default'}::${item.productCode}`;
+    // A short code and its full form are the same product
+    const productCode = normaliseProductCode(item.productCode);
+    const key = `${item.customer ?? 'default'}::${productCode}`;
     const existing = merged.get(key);
     if (existing) existing.quantity += item.quantity;
-    else merged.set(key, { ...item });
+    else merged.set(key, { ...item, productCode });
   }
 
   for (const item of Array.from(merged.values())) {
@@ -447,9 +505,9 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
   const sortedGroups = Array.from(groups.values()).sort((a, b) => groupGrossKg(b) - groupGrossKg(a));
 
   // All pump pallets first, then motors, which may finish on top of a pump pallet
-  const pumps = mergeSmallPumpPallets(
+  const pumps = clubLeftovers(mergeSmallPumpPallets(
     sortedGroups.filter(g => !isMotor(g[0])).flatMap(buildPumpDrafts)
-  );
+  ));
   const motors = mergeSmallMotorPallets(
     sortedGroups.filter(g => isMotor(g[0])).flatMap(buildMotorDrafts),
     pumps,
