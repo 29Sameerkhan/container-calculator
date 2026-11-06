@@ -40,6 +40,14 @@ export const PALLET_BASE_HEIGHT_MM = 180;
 
 // Max gross weight per pallet (kg), wood included — set by the loading team
 export const MAX_PALLET_GROSS_KG = 1000;
+
+// Max gross weight of a single pallet that may be placed on top of another.
+// Mahendra: forklift handles 3,000 kg pairs; conservative limit pending confirmation.
+export const MAX_STACKABLE_PALLET_KG = 1000;
+
+// Max combined gross weight of a stacked pair (bottom + top).
+export const MAX_STACKED_PAIR_KG = 2000;
+
 export const MAX_PUMP_PALLET_LENGTH_MM = 3700;
 
 // Below this total gross weight (kg) LCL is suggested instead of a full container:

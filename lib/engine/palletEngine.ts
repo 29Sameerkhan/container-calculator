@@ -13,6 +13,8 @@ import {
   MAX_STACK_HEIGHT_MM,
   PALLET_BASE_HEIGHT_MM,
   MAX_PALLET_GROSS_KG,
+  MAX_STACKABLE_PALLET_KG,
+  MAX_STACKED_PAIR_KG,
   MAX_PUMP_PALLET_LENGTH_MM,
   LCL_SUGGEST_BELOW_KG,
 } from '@/lib/constants';
@@ -521,8 +523,9 @@ function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
     // Longest-at-bottom applies only to box layers within a pallet.
     bottom.totalGrossKg >= top.totalGrossKg &&
     bottom.heightMm + top.heightMm <= MAX_STACKED_HEIGHT_MM &&         // forklift clearance
-    bottom.totalGrossKg <= MAX_PALLET_GROSS_KG &&                      // each pallet within its
-    top.totalGrossKg <= MAX_PALLET_GROSS_KG &&                         //   own weight limit
+    bottom.totalGrossKg <= MAX_STACKABLE_PALLET_KG &&                  // each pallet within the
+    top.totalGrossKg <= MAX_STACKABLE_PALLET_KG &&                     //   stacking limit
+    bottom.totalGrossKg + top.totalGrossKg <= MAX_STACKED_PAIR_KG &&   // forklift capacity for the pair
     (bottom.customer ?? '') === (top.customer ?? '')                   // consignees kept apart
   );
 }
