@@ -3,6 +3,7 @@
 import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { CONTAINERS, footprintLength, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
 import { PALLET_BASE_HEIGHT_MM } from '@/lib/constants';
+import { familyColorMap } from '@/lib/familyColors';
 import { PalletPlan, ShipmentResult } from '@/lib/types';
 import {
   loadThree, Mesh, Object3D, OrbitControls, PerspectiveCamera, Raycaster, Scene, ThreeLib, Vector3, WebGLRenderer,
@@ -16,17 +17,13 @@ interface Props {
   active: boolean;
 }
 
-// Same palette, in the same first-seen order, as ContainerFloorPlan, so a family
-// has the same colour in both tabs
-const COLORS = [
-  '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
-  '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16',
-];
 const OVERFLOW_COLOR = '#ef4444';
 const WOOD_COLOR = '#8b5a2b';
 const HOVER_EMISSIVE = 0x333333;
 
-const VIEW_HEIGHT_PX = 520;
+// Leaves some page showing on a phone, where the canvas takes every drag
+const VIEW_HEIGHT = 'min(520px, 70vh)';
+const TAP_MAX_MOVE_PX = 10;
 const LAYER_GAP_MM = 3;
 const FOV_DEG = 40;
 const NEAR_MM = 100;
@@ -133,6 +130,7 @@ export default function Container3DView({ pallets, recommendation, placed: saved
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hovered = useRef<{ id: string; meshes: Mesh[] } | null>(null);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
 
   const [three, setThree] = useState<ThreeLib | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
@@ -155,17 +153,7 @@ export default function Container3DView({ pallets, recommendation, placed: saved
     [isLcl, savedPlaced, pallets, container.LENGTH],
   );
 
-  const familyColors = useMemo(() => {
-    const colors: Record<string, string> = {};
-    let colorIdx = 0;
-    for (const p of pallets) {
-      if (!colors[p.family]) {
-        colors[p.family] = COLORS[colorIdx % COLORS.length];
-        colorIdx++;
-      }
-    }
-    return colors;
-  }, [pallets]);
+  const familyColors = useMemo(() => familyColorMap(pallets), [pallets]);
 
   const overflowCount = placed.filter(p => p.overflow).length;
 
@@ -418,9 +406,23 @@ export default function Container3DView({ pallets, recommendation, placed: saved
     });
   }
 
-  function handlePointerLeave() {
+  function handlePointerLeave(e: PointerEvent<HTMLCanvasElement>) {
+    // A finger "leaves" as soon as it lifts, which would hide a tooltip just tapped open
+    if (e.pointerType === 'touch') return;
     setHover(null);
     setTooltip(null);
+  }
+
+  // Touch screens have no hover, so a tap shows the tooltip; a drag doesn't
+  function handlePointerDown(e: PointerEvent<HTMLCanvasElement>) {
+    touchStart.current = e.pointerType === 'touch' ? { x: e.clientX, y: e.clientY } : null;
+  }
+
+  function handlePointerUp(e: PointerEvent<HTMLCanvasElement>) {
+    if (!touchStart.current) return;
+    const moved = Math.hypot(e.clientX - touchStart.current.x, e.clientY - touchStart.current.y);
+    touchStart.current = null;
+    if (moved < TAP_MAX_MOVE_PX) handlePointerMove(e);
   }
 
   return (
@@ -445,7 +447,7 @@ export default function Container3DView({ pallets, recommendation, placed: saved
               ⚠ {overflowCount} pallet{overflowCount > 1 ? 's' : ''} overflow
             </span>
           )}
-          <span className="text-xs text-gray-400">Drag to rotate · Scroll to zoom · Right-drag to pan</span>
+          <span className="text-xs text-gray-400">Drag to rotate · Scroll or pinch to zoom · Right-drag or two fingers to pan</span>
         </div>
       </div>
 
@@ -473,12 +475,14 @@ export default function Container3DView({ pallets, recommendation, placed: saved
       <div
         ref={wrapRef}
         className="relative w-full overflow-hidden rounded-lg border border-gray-200"
-        style={{ height: VIEW_HEIGHT_PX }}
+        style={{ height: VIEW_HEIGHT }}
       >
         <canvas
           ref={canvasRef}
           onPointerMove={handlePointerMove}
           onPointerLeave={handlePointerLeave}
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
           style={{ display: 'block', width: '100%', height: '100%', cursor: tooltip ? 'pointer' : 'grab' }}
         />
 

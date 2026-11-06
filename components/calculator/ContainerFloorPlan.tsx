@@ -2,6 +2,7 @@
 
 import { PalletPlan, ShipmentResult } from '@/lib/types';
 import { packPallets, footprintLength, CONTAINERS, PlacedPallet } from '@/lib/engine/floorPlan';
+import { familyColorMap } from '@/lib/familyColors';
 import { useState } from 'react';
 
 interface Props {
@@ -17,11 +18,6 @@ const SCALE = 0.052;
 const LANE_DX = 10;
 const LANE_DY = 10;
 const C_WIDTH_MM = 2352;
-
-const COLORS = [
-  '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
-  '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16',
-];
 
 function px(mm: number) { return Math.round(mm * SCALE); }
 
@@ -69,14 +65,7 @@ export default function ContainerFloorPlan({ pallets, recommendation, placed: sa
   const sidePadTop = maxLane * LANE_DY;
   const sidePadRight = maxLane * LANE_DX;
 
-  const familyColors: Record<string, string> = {};
-  let colorIdx = 0;
-  for (const p of pallets) {
-    if (!familyColors[p.family]) {
-      familyColors[p.family] = COLORS[colorIdx % COLORS.length];
-      colorIdx++;
-    }
-  }
+  const familyColors = familyColorMap(pallets);
 
   // Every rectangle in the side view, in paint order: far lanes first, then
   // tallest first within a lane. A stack gives two rectangles (bottom on the

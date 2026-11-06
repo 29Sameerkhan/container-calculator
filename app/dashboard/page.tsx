@@ -9,7 +9,8 @@ import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
-import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
+import ShareLinkButton from '@/components/calculator/ShareLinkButton';
+import { exportPlanPdf, planPdfFilename, planShareUrl } from '@/lib/exportPlanPdf';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 
 // One order card on the dashboard. `items` are the rows its form starts with
@@ -263,7 +264,7 @@ function DashboardInner() {
     }
     setPdfStatus('exporting');
     try {
-      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName));
+      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), id ? planShareUrl(id) : undefined);
       setPdfStatus('done');
       // Clear the form for the next calculation once the confirmation has been seen
       resetTimer.current = setTimeout(handleReset, 2000);
@@ -469,7 +470,13 @@ function DashboardInner() {
                     : '💾 Save Calculation & Download PDF'}
             </button>
             {saveStatus === 'saved' && savedId && (
-              <p className="text-sm text-green-700">Saved to history as #{savedId}</p>
+              <>
+                <p className="text-sm text-green-700">Saved to history as #{savedId}</p>
+                <ShareLinkButton
+                  planId={savedId}
+                  className="text-sm font-medium text-blue-700 border border-blue-200 hover:bg-blue-50 rounded-xl px-4 py-2.5 transition-colors"
+                />
+              </>
             )}
             {saveStatus === 'error' && (
               <p className="text-sm text-red-600">Auto-save to history failed — click Save to retry</p>

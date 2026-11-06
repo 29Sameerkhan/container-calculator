@@ -7,7 +7,8 @@ import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { formatSavedAt } from '@/lib/format';
-import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
+import ShareLinkButton from '@/components/calculator/ShareLinkButton';
+import { exportPlanPdf, planPdfFilename, planShareUrl } from '@/lib/exportPlanPdf';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 
@@ -55,7 +56,7 @@ function CalculationDetail() {
     if (!calc || !planRef.current) return;
     setPdfStatus('exporting');
     try {
-      await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName));
+      await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName), planShareUrl(calc.id));
       setPdfStatus('idle');
     } catch (e) {
       console.error(e);
@@ -108,6 +109,12 @@ function CalculationDetail() {
           <p className="text-sm text-blue-200 mt-0.5">SLEKA Industries · Export Operations</p>
         </div>
         <div className="flex items-center gap-3">
+          {calc && (
+            <ShareLinkButton
+              planId={calc.id}
+              className="text-sm text-white border border-white/40 hover:bg-white/10 rounded-md px-3 py-1.5 transition-colors font-medium"
+            />
+          )}
           {calc && (
             <button
               onClick={handleExport}

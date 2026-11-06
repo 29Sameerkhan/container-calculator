@@ -39,7 +39,7 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
 
   return (
     <div className={`rounded-xl border-2 p-6 ${rec.bg}`}>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">Recommendation</p>
           <p className={`text-3xl font-bold ${rec.color}`}>{label}</p>
