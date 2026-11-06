@@ -7,7 +7,7 @@ import { X } from 'lucide-react';
 import OrderItemForm, { isComplete, codeWarning } from '@/components/calculator/OrderItemForm';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
-import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
+import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
@@ -444,7 +444,7 @@ function DashboardInner() {
             />
             <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
             <PdfOrderLines orders={calculatedOrders} />
-            <ContainerFloorPlan
+            <ContainerViewTabs
               pallets={result.pallets}
               recommendation={result.containerRecommendation}
               placed={result.placed}

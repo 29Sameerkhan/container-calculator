@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
-import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
+import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { formatSavedAt } from '@/lib/format';
 import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
@@ -183,7 +183,7 @@ function CalculationDetail() {
             <PdfOrderLines orders={savedOrders(calc)} />
             {/* Drawn from the positions saved with the result, so it matches what
                 was shown at calculation time */}
-            <ContainerFloorPlan
+            <ContainerViewTabs
               pallets={calc.result.pallets}
               recommendation={calc.result.containerRecommendation}
               placed={calc.result.placed}
