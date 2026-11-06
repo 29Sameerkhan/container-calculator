@@ -5,6 +5,7 @@ import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_WIDTH } from '@/lib/constants';
 import { calcPumpBox, hasStageWeight, isValidStages, pumpColumnFromCode, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
 import { calcMotorBox, parseMotorCode } from '@/lib/engine/motorData';
+import { normaliseProductCode } from '@/lib/engine/utils';
 import { Trash2, Plus, FileSpreadsheet, X } from 'lucide-react';
 
 interface Props {
@@ -96,7 +97,8 @@ const PARSE_FAMILIES = ['SK02', 'SK03', 'SK05', 'SK09', 'SK12', 'SK13', 'SK14', 
 
 // Fills the line from its item code: a motor code (SM-…) or a pump code (SK…).
 // Returns null, leaving the row as it is, when the code isn't recognised.
-function parseItemCode(row: OrderItem): OrderItem | null {
+function parseItemCode(entered: OrderItem): OrderItem | null {
+  const row = { ...entered, productCode: normaliseProductCode(entered.productCode) };
   return parseMotorItem(row) ?? parsePumpItem(row);
 }
 
@@ -271,7 +273,7 @@ async function readImportSheet(file: File): Promise<ImportSheet> {
   }
   const entries = cells
     .map((cols, i) => ({
-      code: String(cols[0] ?? '').trim(),
+      code: normaliseProductCode(String(cols[0] ?? '')),
       qty: typeof cols[1] === 'number' ? cols[1] : Number(String(cols[1] ?? '').trim()),
       sheetRow: i + 1,
     }))
@@ -341,7 +343,7 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
     pastedRow.current = null;
     const row = { ...rows[index], productCode: code };
     const parsed = pasted ? parseItemCode(row) : null;
-    if (parsed) codeOnFocus.current = code; // already parsed; don't redo on blur
+    if (parsed) codeOnFocus.current = parsed.productCode; // already parsed; don't redo on blur
     commitRows(rows.map((r, i) => (i === index ? parsed ?? row : r)));
     if (parsed && boxFromCode(parsed)) flashAutoFilled(index, parsed.stages !== undefined);
   }
