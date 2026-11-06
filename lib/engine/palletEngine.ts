@@ -30,6 +30,10 @@ const MAX_STACKED_HEIGHT_MM = 2200;
 // Layered pallet height limit, wood base included
 const MAX_LAYERED_PALLET_HEIGHT_MM = 2200;
 const MAX_MOTORS_PER_PALLET = 24;
+// Pallets clubbed from remainders of different HP variants may hold a few more
+const MAX_MOTORS_REMAINDER_PALLET = 30;
+// Motor-only pallets, wood included. Pump pallets stay at MAX_PALLET_GROSS_KG.
+const MAX_MOTOR_PALLET_GROSS_KG = 1500;
 
 // Pumps from different pools share a pallet only if their pool widths are this close
 const MAX_CROSS_POOL_WIDTH_GAP_MM = 100;
@@ -286,42 +290,38 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
   return drafts;
 }
 
+// Each HP variant fills its own pallets, up to MAX_MOTORS_PER_PALLET or the weight
+// limit, whichever comes first. What's left of each variant is then clubbed: heaviest
+// motors first, each remainder staying whole on the first pallet it fits, so heavier
+// motors end up at the bottom. Remainders that don't fit start another pallet.
 function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
   const drafts: PalletDraft[] = [];
   const widthMm = resolvePalletWidth(items[0]);
-  const remaining = new Map<string, number>(items.map(item => [item.productCode, item.quantity]));
-  const sorted = [...items].sort((a, b) => b.quantity - a.quantity);
-  // The pallet weight limit is for the whole pallet, wood included
-  const woodReserveKg = Math.max(...items.map(i => resolveWoodWeight(i, true)));
+  const remainders: PalletSku[] = [];
 
-  while (Array.from(remaining.values()).some(q => q > 0)) {
-    const skus: PalletSku[] = [];
-    let motors = 0;
-    let grossKg = 0;
-
-    for (const item of sorted) {
-      const rem = remaining.get(item.productCode) ?? 0;
-      if (rem === 0) continue;
-      const qty = Math.min(
-        rem,
-        MAX_MOTORS_PER_PALLET - motors,
-        Math.floor((MAX_PALLET_GROSS_KG - woodReserveKg - grossKg) / item.grossWeightKg),
-      );
-      if (qty <= 0) continue;
-      skus.push({ item, qty });
-      motors += qty;
-      grossKg += qty * item.grossWeightKg;
-      remaining.set(item.productCode, rem - qty);
+  for (const item of [...items].sort((a, b) => b.quantity - a.quantity)) {
+    // A single motor over the weight limit still gets a pallet of its own
+    const perPallet = Math.max(1, Math.min(
+      MAX_MOTORS_PER_PALLET,
+      Math.floor((MAX_MOTOR_PALLET_GROSS_KG - resolveWoodWeight(item, false)) / item.grossWeightKg),
+    ));
+    for (let i = 0; i < Math.floor(item.quantity / perPallet); i++) {
+      drafts.push({ skus: [{ item, qty: perPallet }], widthMm, motorOnly: true });
     }
-
-    // A single box over a limit still gets a pallet of its own
-    if (skus.length === 0) {
-      const item = sorted.find(i => (remaining.get(i.productCode) ?? 0) > 0)!;
-      skus.push({ item, qty: 1 });
-      remaining.set(item.productCode, (remaining.get(item.productCode) ?? 1) - 1);
-    }
-    drafts.push({ skus, widthMm, motorOnly: true });
+    const qty = item.quantity % perPallet;
+    if (qty > 0) remainders.push({ item, qty });
   }
+
+  const clubbed: PalletSku[][] = [];
+  for (const remainder of remainders.sort((a, b) => b.item.grossWeightKg - a.item.grossWeightKg)) {
+    const pallet = clubbed.find(skus =>
+      boxCount(skus) + remainder.qty <= MAX_MOTORS_REMAINDER_PALLET &&
+      palletGrossKg([...skus, remainder]) <= MAX_MOTOR_PALLET_GROSS_KG
+    );
+    if (pallet) pallet.push(remainder);
+    else clubbed.push([remainder]);
+  }
+  clubbed.forEach(skus => drafts.push({ skus, widthMm, motorOnly: true }));
   return drafts;
 }
 
