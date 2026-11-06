@@ -1,11 +1,12 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { db } from '@/lib/db';
 import { calculations } from '@/lib/db/schema';
+import { claimShareToken, isShareToken } from '@/lib/db/shareToken';
 import { formatSavedAt } from '@/lib/format';
 import { ShipmentResult } from '@/lib/types';
 
@@ -19,23 +20,31 @@ export const metadata: Metadata = {
 
 // Public read-only view of a saved plan: no edit controls, and only the fields
 // shown here are sent to the browser
-export default async function PublicPlanPage({ params }: { params: { id: string } }) {
-  // Strict check (not parseInt): "6abc" must not be treated as 6
-  const id = Number(params.id);
-  if (!Number.isInteger(id) || id <= 0) notFound();
+export default async function PublicPlanPage({ params }: { params: { token: string } }) {
+  const { token } = params;
 
-  const [row] = await db
-    .select({
-      id: calculations.id,
-      customerName: calculations.customerName,
-      orderRef: calculations.orderRef,
-      resultJson: calculations.resultJson,
-      createdAt: calculations.createdAt,
-    })
-    .from(calculations)
-    .where(eq(calculations.id, id))
-    .limit(1);
-  if (!row) notFound();
+  const [row] = isShareToken(token)
+    ? await db
+        .select({
+          id: calculations.id,
+          customerName: calculations.customerName,
+          orderRef: calculations.orderRef,
+          resultJson: calculations.resultJson,
+          createdAt: calculations.createdAt,
+        })
+        .from(calculations)
+        .where(eq(calculations.shareToken, token))
+        .limit(1)
+    : [];
+
+  if (!row) {
+    // Lazy migration: a plan saved before tokens existed gets one the first time its
+    // number is requested. A plan that already has a token isn't reachable by number.
+    const id = /^\d+$/.test(token) ? Number(token) : 0;
+    const newToken = id > 0 ? await claimShareToken(id) : null;
+    if (newToken) redirect(`/plan/${newToken}`);
+    notFound();
+  }
 
   const result: ShipmentResult = JSON.parse(row.resultJson);
   const isConsolidated = (result.perCustomer?.length ?? 0) > 1;

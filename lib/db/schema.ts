@@ -12,6 +12,7 @@ export const calculations = sqliteTable('calculations', {
   itemsJson: text('items_json').notNull(),   // JSON string of OrderItem[]
   resultJson: text('result_json').notNull(), // JSON string of ShipmentResult
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  shareToken: text('share_token').unique(), // random part of the plan's public link
 });
 
 export type Calculation = typeof calculations.$inferSelect;

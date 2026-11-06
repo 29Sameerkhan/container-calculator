@@ -10,7 +10,7 @@ import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import ShareLinkButton from '@/components/calculator/ShareLinkButton';
-import { exportPlanPdf, planPdfFilename, planShareUrl } from '@/lib/exportPlanPdf';
+import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 
 // One order card on the dashboard. `items` are the rows its form starts with
@@ -264,7 +264,7 @@ function DashboardInner() {
     }
     setPdfStatus('exporting');
     try {
-      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), id ? planShareUrl(id) : undefined);
+      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), id ? await planShareUrlForPdf(id) : undefined);
       setPdfStatus('done');
       // Clear the form for the next calculation once the confirmation has been seen
       resetTimer.current = setTimeout(handleReset, 2000);

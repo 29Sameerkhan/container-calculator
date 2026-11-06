@@ -13,13 +13,22 @@ interface Props {
 export default function ShareLinkButton({ planId, className }: Props) {
   const [copied, setCopied] = useState(false);
   const [manualUrl, setManualUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (resetTimer.current) clearTimeout(resetTimer.current);
   }, []);
 
   async function share() {
-    const url = planShareUrl(planId);
+    setFailed(false);
+    let url: string;
+    try {
+      url = await planShareUrl(planId);
+    } catch (e) {
+      console.error(e);
+      setFailed(true);
+      return;
+    }
     try {
       await navigator.clipboard.writeText(url);
       setManualUrl(null);
@@ -34,7 +43,7 @@ export default function ShareLinkButton({ planId, className }: Props) {
   return (
     <>
       <button onClick={share} className={className}>
-        {copied ? '✓ Link copied' : '🔗 Share'}
+        {copied ? '✓ Link copied' : failed ? 'Share failed — retry' : '🔗 Share'}
       </button>
       {manualUrl && (
         <input

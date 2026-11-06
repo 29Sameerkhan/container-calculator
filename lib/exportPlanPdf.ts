@@ -12,9 +12,23 @@ export function planPdfFilename(id: number | null, customerName: string): string
   return ['SLEKA-plan', id ? `#${id}` : null, customer || null].filter(Boolean).join('-') + '.pdf';
 }
 
-// The plan's public read-only page, on whichever site this is running from
-export function planShareUrl(id: number): string {
-  return `${window.location.origin}/plan/${id}`;
+// The plan's public read-only page, on whichever site this is running from.
+// Asks the server for the token, as a plan saved before tokens existed gets one now.
+export async function planShareUrl(id: number): Promise<string> {
+  const res = await fetch(`/api/calculations/${id}/share`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Could not get the share link');
+  return `${window.location.origin}/plan/${data.shareToken}`;
+}
+
+// For the PDF footer: a failure here shouldn't stop the PDF, it just goes without the link
+export async function planShareUrlForPdf(id: number): Promise<string | undefined> {
+  try {
+    return await planShareUrl(id);
+  } catch (e) {
+    console.error(e);
+    return undefined;
+  }
 }
 
 // shareUrl adds a link and QR code at the bottom of the last page

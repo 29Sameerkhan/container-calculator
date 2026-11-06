@@ -44,17 +44,21 @@ export default function HistoryPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Typed for each delete and checked by the server against ADMIN_SECRET. The
+  // secret itself is never part of the page's code.
+  const [adminPassword, setAdminPassword] = useState('');
 
   function closeDeleteModal() {
     if (deleting) return;
     setDeleteId(null);
     setDeleteError(null);
+    setAdminPassword('');
   }
 
   // Escape closes the confirmation
   useEffect(() => {
     if (deleteId === null) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !deleting) { setDeleteId(null); setDeleteError(null); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !deleting) { setDeleteId(null); setDeleteError(null); setAdminPassword(''); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [deleteId, deleting]);
@@ -64,11 +68,16 @@ export default function HistoryPage() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(`/api/calculations/${deleteId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/calculations/${deleteId}`, {
+        method: 'DELETE',
+        headers: { 'x-admin-secret': adminPassword },
+      });
+      if (res.status === 403) throw new Error('Wrong admin password');
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Delete failed');
       setRows(prev => prev.filter(r => r.id !== deleteId));
       setDeleteId(null);
+      setAdminPassword('');
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : 'Delete failed');
     } finally {
@@ -252,6 +261,16 @@ export default function HistoryPage() {
               Delete calculation #{deleteId}?
             </h2>
             <p className="mt-1 text-sm text-gray-500">This cannot be undone.</p>
+            <label className="mt-4 block text-sm font-medium text-gray-700">
+              Admin password
+              <input
+                type="password"
+                autoComplete="off"
+                value={adminPassword}
+                onChange={e => setAdminPassword(e.target.value)}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
             {deleteError && (
               <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{deleteError}</p>
             )}
@@ -265,7 +284,7 @@ export default function HistoryPage() {
               </button>
               <button
                 onClick={handleDelete}
-                disabled={deleting}
+                disabled={deleting || !adminPassword}
                 className="text-sm font-medium rounded-lg px-4 py-2 text-white bg-red-600 hover:bg-red-700 disabled:opacity-60 transition-colors"
               >
                 {deleting ? 'Deleting…' : 'Confirm Delete'}

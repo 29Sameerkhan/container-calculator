@@ -8,7 +8,7 @@ import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { formatSavedAt } from '@/lib/format';
 import ShareLinkButton from '@/components/calculator/ShareLinkButton';
-import { exportPlanPdf, planPdfFilename, planShareUrl } from '@/lib/exportPlanPdf';
+import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 
@@ -56,7 +56,7 @@ function CalculationDetail() {
     if (!calc || !planRef.current) return;
     setPdfStatus('exporting');
     try {
-      await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName), planShareUrl(calc.id));
+      await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName), await planShareUrlForPdf(calc.id));
       setPdfStatus('idle');
     } catch (e) {
       console.error(e);
