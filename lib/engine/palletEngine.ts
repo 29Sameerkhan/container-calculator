@@ -29,10 +29,8 @@ const MAX_STACKED_HEIGHT_MM = 2200;
 
 // Layered pallet height limit, wood base included
 const MAX_LAYERED_PALLET_HEIGHT_MM = 2200;
-const MAX_MOTORS_PER_PALLET = 24;
-// Pallets clubbed from remainders of different HP variants may hold a few more
-const MAX_MOTORS_REMAINDER_PALLET = 30;
-// Motor-only pallets, wood included. Pump pallets stay at MAX_PALLET_GROSS_KG.
+// Motor-only pallets, wood included: their only limit, with no motor count cap.
+// Pump pallets stay at MAX_PALLET_GROSS_KG.
 const MAX_MOTOR_PALLET_GROSS_KG = 1500;
 
 // Pumps from different pools share a pallet only if their pool widths are this close
@@ -148,14 +146,22 @@ function groupGrossKg(items: OrderItem[]): number {
   return items.reduce((sum, i) => sum + i.grossWeightKg * i.quantity, 0);
 }
 
-// Whether a layer may sit directly on the one below: never longer, never a
-// bigger face, never heavier
+// Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+function belongsBelow(below: OrderItem, above: OrderItem): boolean {
+  return below.boxLengthMm > above.boxLengthMm ||
+    (below.boxLengthMm === above.boxLengthMm && below.grossWeightKg >= above.grossWeightKg);
+}
+
+// Sort order for layers, bottom first.
+// Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+function bottomLayerFirst(a: OrderItem, b: OrderItem): number {
+  return b.boxLengthMm - a.boxLengthMm || b.grossWeightKg - a.grossWeightKg;
+}
+
+// Whether a layer may sit directly on the one below: in longest-at-bottom order,
+// never a bigger face
 function canSitOn(layer: PalletSku, below: PalletSku): boolean {
-  return (
-    layer.item.boxLengthMm <= below.item.boxLengthMm &&
-    layer.item.boxWidthMm <= below.item.boxWidthMm &&
-    layer.item.grossWeightKg * layer.qty <= below.item.grossWeightKg * below.qty
-  );
+  return belongsBelow(below.item, layer.item) && layer.item.boxWidthMm <= below.item.boxWidthMm;
 }
 
 // Whether every pump in one group may share a pallet with every pump in the other
@@ -181,8 +187,8 @@ function evenShares(qty: number, parts: number): number[] {
 
 // A product that has to split over several pallets can carry the next product
 // across all of them, when that product couldn't stay whole on the last pallet.
-// Both are spread evenly, which leaves each lower layer heavy enough to carry its
-// share. Returns the pallets, or null if the normal fill should be used instead.
+// Both are spread evenly. Returns the pallets, or null if the normal fill should be
+// used instead.
 function shareSplitPallets(
   lower: PalletSku,
   upper: PalletSku,
@@ -211,9 +217,8 @@ function shareSplitPallets(
 // shorter product (see shareSplitPallets).
 function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
   const drafts: PalletDraft[] = [];
-  const sorted = [...items].sort((a, b) =>
-    b.boxLengthMm - a.boxLengthMm || b.grossWeightKg - a.grossWeightKg
-  );
+  // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+  const sorted = [...items].sort(bottomLayerFirst);
   // The pallet weight limit is for the whole pallet, wood included
   const woodReserveKg = Math.max(...items.map(i => resolveWoodWeight(i, true)));
 
@@ -265,10 +270,7 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
         const below = skus[skus.length - 1];
         widthMm = Math.max(palletWidthMm, itemWidthMm);
         const blocked = item.boxWidthMm > below.item.boxWidthMm || !poolsWithinGap(skus, [{ item, qty: 1 }]);
-        const fits = blocked ? 0 : Math.min(
-          boxesFitting(grossKg, layeredHeightMm(skus, widthMm), widthMm),
-          Math.floor((below.item.grossWeightKg * below.qty) / item.grossWeightKg),
-        );
+        const fits = blocked ? 0 : boxesFitting(grossKg, layeredHeightMm(skus, widthMm), widthMm);
         const fitsWhole = remaining <= fits;
         const palletsIfNew = Math.ceil(remaining / onNewPallet);
         const palletsIfTopUp = 1 + Math.ceil((remaining - fits) / onNewPallet);
@@ -290,10 +292,9 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
   return drafts;
 }
 
-// Each HP variant fills its own pallets, up to MAX_MOTORS_PER_PALLET or the weight
-// limit, whichever comes first. What's left of each variant is then clubbed: heaviest
-// motors first, each remainder staying whole on the first pallet it fits, so heavier
-// motors end up at the bottom. Remainders that don't fit start another pallet.
+// Each HP variant fills its own pallets up to the weight limit. What's left of each
+// variant is then clubbed in bottom-layer order, each remainder staying whole on the
+// first pallet it fits. Remainders that don't fit start another pallet.
 function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
   const drafts: PalletDraft[] = [];
   const widthMm = resolvePalletWidth(items[0]);
@@ -301,9 +302,8 @@ function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
 
   for (const item of [...items].sort((a, b) => b.quantity - a.quantity)) {
     // A single motor over the weight limit still gets a pallet of its own
-    const perPallet = Math.max(1, Math.min(
-      MAX_MOTORS_PER_PALLET,
-      Math.floor((MAX_MOTOR_PALLET_GROSS_KG - resolveWoodWeight(item, false)) / item.grossWeightKg),
+    const perPallet = Math.max(1, Math.floor(
+      (MAX_MOTOR_PALLET_GROSS_KG - resolveWoodWeight(item, false)) / item.grossWeightKg
     ));
     for (let i = 0; i < Math.floor(item.quantity / perPallet); i++) {
       drafts.push({ skus: [{ item, qty: perPallet }], widthMm, motorOnly: true });
@@ -313,11 +313,9 @@ function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
   }
 
   const clubbed: PalletSku[][] = [];
-  for (const remainder of remainders.sort((a, b) => b.item.grossWeightKg - a.item.grossWeightKg)) {
-    const pallet = clubbed.find(skus =>
-      boxCount(skus) + remainder.qty <= MAX_MOTORS_REMAINDER_PALLET &&
-      palletGrossKg([...skus, remainder]) <= MAX_MOTOR_PALLET_GROSS_KG
-    );
+  // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+  for (const remainder of remainders.sort((a, b) => bottomLayerFirst(a.item, b.item))) {
+    const pallet = clubbed.find(skus => palletGrossKg([...skus, remainder]) <= MAX_MOTOR_PALLET_GROSS_KG);
     if (pallet) pallet.push(remainder);
     else clubbed.push([remainder]);
   }
@@ -372,14 +370,10 @@ function clubFaceMm(d: PalletDraft): number | null {
   return oneFace && CLUB_FACE_SIZES_MM.includes(boxWidthMm) ? boxWidthMm : null;
 }
 
-// Heavier pallet's boxes on the bottom; taller on the bottom if equally heavy
+// Per Mahendra: longest box always at bottom; weight is tiebreaker only.
 function clubbedDraft(a: PalletDraft, b: PalletDraft): PalletDraft {
-  const widthMm = Math.max(a.widthMm, b.widthMm);
-  const aFirst =
-    boxesGrossKg(a.skus) - boxesGrossKg(b.skus) ||
-    layeredHeightMm(a.skus, widthMm) - layeredHeightMm(b.skus, widthMm);
-  const skus = aFirst >= 0 ? [...a.skus, ...b.skus] : [...b.skus, ...a.skus];
-  return { skus, widthMm, motorOnly: false };
+  const skus = [...a.skus, ...b.skus].sort((x, y) => bottomLayerFirst(x.item, y.item));
+  return { skus, widthMm: Math.max(a.widthMm, b.widthMm), motorOnly: false };
 }
 
 // Mahendra's rule: after primary grouping, a small 100mm-face pallet and a small
@@ -417,7 +411,8 @@ function clubLeftovers(drafts: PalletDraft[]): PalletDraft[] {
 // pallets that still stand on their own.
 function mergeSmallMotorPallets(motors: PalletDraft[], pumps: PalletDraft[]): PalletDraft[] {
   return motors.filter(guest => {
-    const longestFirst = [...guest.skus].sort((a, b) => b.item.boxLengthMm - a.item.boxLengthMm);
+    // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+    const longestFirst = [...guest.skus].sort((a, b) => bottomLayerFirst(a.item, b.item));
     const host = pumps
       .filter(d =>
         d.skus[0].item.productType === 'pump' &&
@@ -520,9 +515,10 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
 // A pallet may go on top of another only if all of these hold
 function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
   return (
-    top.lengthMm <= bottom.lengthMm &&                                 // fits within the
-    top.widthMm <= bottom.widthMm &&                                   //   bottom footprint
-    bottom.totalGrossKg >= top.totalGrossKg &&                         // heavier on the bottom
+    // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+    (bottom.lengthMm > top.lengthMm ||
+      (bottom.lengthMm === top.lengthMm && bottom.totalGrossKg >= top.totalGrossKg)) &&
+    top.widthMm <= bottom.widthMm &&                                   // fits the bottom footprint
     bottom.heightMm + top.heightMm <= MAX_STACKED_HEIGHT_MM &&         // forklift clearance
     bottom.totalGrossKg <= MAX_PALLET_GROSS_KG &&                      // each pallet within its
     top.totalGrossKg <= MAX_PALLET_GROSS_KG &&                         //   own weight limit
@@ -530,20 +526,21 @@ function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
   );
 }
 
-// Pairs pallets two-high. Heaviest pallets are tried as bottoms first; each
+// Pairs pallets two-high. Longest pallets are tried as bottoms first; each
 // takes the best top that passes canStack: same family first, then the one
 // saving the most floor. A pallet is in at most one stack (no triple stacking).
 // Stops after maxPairs pairs.
 export function stackPallets(pallets: PalletPlan[], maxPairs = Infinity): PalletPlan[] {
-  const byWeight = [...pallets].sort((a, b) => b.totalGrossKg - a.totalGrossKg);
+  // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+  const bottomsFirst = [...pallets].sort((a, b) => b.lengthMm - a.lengthMm || b.totalGrossKg - a.totalGrossKg);
   const partner = new Map<string, { id: string; position: 'bottom' | 'top' }>();
   let pairs = 0;
 
-  for (const bottom of byWeight) {
+  for (const bottom of bottomsFirst) {
     if (pairs >= maxPairs) break;
     if (partner.has(bottom.palletId)) continue;
     let best: PalletPlan | null = null;
-    for (const top of byWeight) {
+    for (const top of bottomsFirst) {
       if (top === bottom || partner.has(top.palletId) || !canStack(bottom, top)) continue;
       const sameFamily = (p: PalletPlan) => p.family === bottom.family;
       const better = !best
