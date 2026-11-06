@@ -42,11 +42,12 @@ export const PALLET_BASE_HEIGHT_MM = 180;
 export const MAX_PALLET_GROSS_KG = 1000;
 
 // Max gross weight of a single pallet that may be placed on top of another.
-// Mahendra: forklift handles 3,000 kg pairs; conservative limit pending confirmation.
-export const MAX_STACKABLE_PALLET_KG = 1000;
+// Mahendra confirmed: forklift rated 3,000 kg; each pallet up to 1,500 kg, 6 Nov 2026.
+export const MAX_STACKABLE_PALLET_KG = 1500;
 
 // Max combined gross weight of a stacked pair (bottom + top).
-export const MAX_STACKED_PAIR_KG = 2000;
+// Mahendra confirmed: 1,500 + 1,500 = 3,000 kg max pair, 6 Nov 2026.
+export const MAX_STACKED_PAIR_KG = 3000;
 
 export const MAX_PUMP_PALLET_LENGTH_MM = 3700;
 
