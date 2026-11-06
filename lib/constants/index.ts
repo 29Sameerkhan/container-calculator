@@ -33,7 +33,7 @@ export const WOOD_WEIGHT = {
 };
 
 // Max stacking height inside container (mm)
-export const MAX_STACK_HEIGHT_MM = 2350;
+export const MAX_STACK_HEIGHT_MM = 2200;
 
 // Wooden pallet base height (mm), added on top of stacked box height
 export const PALLET_BASE_HEIGHT_MM = 180;

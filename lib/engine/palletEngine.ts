@@ -515,10 +515,11 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
 // A pallet may go on top of another only if all of these hold
 function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
   return (
-    // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
-    (bottom.lengthMm > top.lengthMm ||
-      (bottom.lengthMm === top.lengthMm && bottom.totalGrossKg >= top.totalGrossKg)) &&
-    top.widthMm <= bottom.widthMm &&                                   // fits the bottom footprint
+    top.lengthMm <= bottom.lengthMm &&                                 // fits within the
+    top.widthMm <= bottom.widthMm &&                                   //   bottom footprint
+    // Whole-pallet stacking: heavier on floor (forklift stability).
+    // Longest-at-bottom applies only to box layers within a pallet.
+    bottom.totalGrossKg >= top.totalGrossKg &&
     bottom.heightMm + top.heightMm <= MAX_STACKED_HEIGHT_MM &&         // forklift clearance
     bottom.totalGrossKg <= MAX_PALLET_GROSS_KG &&                      // each pallet within its
     top.totalGrossKg <= MAX_PALLET_GROSS_KG &&                         //   own weight limit
@@ -526,21 +527,22 @@ function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
   );
 }
 
-// Pairs pallets two-high. Longest pallets are tried as bottoms first; each
+// Pairs pallets two-high. Heaviest pallets are tried as bottoms first; each
 // takes the best top that passes canStack: same family first, then the one
 // saving the most floor. A pallet is in at most one stack (no triple stacking).
 // Stops after maxPairs pairs.
 export function stackPallets(pallets: PalletPlan[], maxPairs = Infinity): PalletPlan[] {
-  // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
-  const bottomsFirst = [...pallets].sort((a, b) => b.lengthMm - a.lengthMm || b.totalGrossKg - a.totalGrossKg);
+  // Whole-pallet stacking: heavier on floor (forklift stability).
+  // Longest-at-bottom applies only to box layers within a pallet.
+  const byWeight = [...pallets].sort((a, b) => b.totalGrossKg - a.totalGrossKg);
   const partner = new Map<string, { id: string; position: 'bottom' | 'top' }>();
   let pairs = 0;
 
-  for (const bottom of bottomsFirst) {
+  for (const bottom of byWeight) {
     if (pairs >= maxPairs) break;
     if (partner.has(bottom.palletId)) continue;
     let best: PalletPlan | null = null;
-    for (const top of bottomsFirst) {
+    for (const top of byWeight) {
       if (top === bottom || partner.has(top.palletId) || !canStack(bottom, top)) continue;
       const sameFamily = (p: PalletPlan) => p.family === bottom.family;
       const better = !best
