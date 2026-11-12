@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { signOut } from 'next-auth/react';
 import { X } from 'lucide-react';
 import OrderItemForm, { isComplete, codeWarning } from '@/components/calculator/OrderItemForm';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
@@ -305,12 +304,6 @@ function DashboardInner() {
             className="text-sm text-white border border-white/40 hover:bg-white/10 rounded-md px-3 py-1.5 transition-colors"
           >
             New Calculation
-          </button>
-          <button
-            onClick={() => signOut({ callbackUrl: '/login' })}
-            className="text-sm text-blue-100 hover:text-white transition-colors"
-          >
-            Sign out
           </button>
         </div>
       </div>
