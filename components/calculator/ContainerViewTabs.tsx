@@ -3,6 +3,7 @@
 import { ComponentProps, useState } from 'react';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import Container3DView from '@/components/calculator/Container3DView';
+import PdfSideView from '@/components/calculator/PdfSideView';
 
 type Tab = 'plan' | '3d';
 
@@ -11,12 +12,14 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: '3d', label: '3D View' },
 ];
 
+type Props = ComponentProps<typeof ContainerFloorPlan> & { initialTab?: Tab };
+
 // Floor plan and 3D view of the same result. Both stay mounted once opened, so
 // the floor plan keeps its Top/Side choice and the 3D view keeps its camera.
-export default function ContainerViewTabs(props: ComponentProps<typeof ContainerFloorPlan>) {
-  const [tab, setTab] = useState<Tab>('plan');
+export default function ContainerViewTabs({ initialTab = 'plan', ...props }: Props) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   // The 3D scene isn't created until its tab is first opened
-  const [opened3d, setOpened3d] = useState(false);
+  const [opened3d, setOpened3d] = useState(initialTab === '3d');
 
   return (
     <div>
@@ -39,9 +42,11 @@ export default function ContainerViewTabs(props: ComponentProps<typeof Container
       </div>
 
       {/* data-pdf-only: hidden on screen but still captured by the PDF export */}
-      <div role="tabpanel" className={tab === 'plan' ? undefined : 'hidden'} data-pdf-only={tab === 'plan' ? undefined : true}>
+      <div role="tabpanel" data-pdf-keep className={tab === 'plan' ? undefined : 'hidden'} data-pdf-only={tab === 'plan' ? undefined : true}>
         <ContainerFloorPlan {...props} />
       </div>
+
+      <PdfSideView {...props} />
 
       {opened3d && (
         <div role="tabpanel" data-pdf-hide className={tab === '3d' ? undefined : 'hidden'}>

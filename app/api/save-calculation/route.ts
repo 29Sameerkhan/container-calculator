@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { calculations } from '@/lib/db/schema';
+import { newShareToken } from '@/lib/db/shareToken';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -36,6 +37,7 @@ export async function POST(req: NextRequest) {
       palletCount: result.pallets.length,
       itemsJson: JSON.stringify(items),
       resultJson: JSON.stringify(result),
+      shareToken: newShareToken(),
     }).returning();
 
     return NextResponse.json({ success: true, id: saved.id });

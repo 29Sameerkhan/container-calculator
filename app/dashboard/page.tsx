@@ -3,13 +3,15 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { signOut } from 'next-auth/react';
 import { X } from 'lucide-react';
 import OrderItemForm, { isComplete, codeWarning } from '@/components/calculator/OrderItemForm';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
-import { exportPlanPdf, planPdfFilename } from '@/lib/exportPlanPdf';
+import ShareLinkButton from '@/components/calculator/ShareLinkButton';
+import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 
 // One order card on the dashboard. `items` are the rows its form starts with
@@ -263,7 +265,7 @@ function DashboardInner() {
     }
     setPdfStatus('exporting');
     try {
-      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName));
+      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), id ? await planShareUrlForPdf(id) : undefined);
       setPdfStatus('done');
       // Clear the form for the next calculation once the confirmation has been seen
       resetTimer.current = setTimeout(handleReset, 2000);
@@ -303,6 +305,12 @@ function DashboardInner() {
             className="text-sm text-white border border-white/40 hover:bg-white/10 rounded-md px-3 py-1.5 transition-colors"
           >
             New Calculation
+          </button>
+          <button
+            onClick={() => signOut({ callbackUrl: '/login' })}
+            className="text-sm text-blue-100 hover:text-white transition-colors"
+          >
+            Sign out
           </button>
         </div>
       </div>
@@ -469,7 +477,13 @@ function DashboardInner() {
                     : '💾 Save Calculation & Download PDF'}
             </button>
             {saveStatus === 'saved' && savedId && (
-              <p className="text-sm text-green-700">Saved to history as #{savedId}</p>
+              <>
+                <p className="text-sm text-green-700">Saved to history as #{savedId}</p>
+                <ShareLinkButton
+                  planId={savedId}
+                  className="text-sm font-medium text-blue-700 border border-blue-200 hover:bg-blue-50 rounded-xl px-4 py-2.5 transition-colors"
+                />
+              </>
             )}
             {saveStatus === 'error' && (
               <p className="text-sm text-red-600">Auto-save to history failed — click Save to retry</p>
