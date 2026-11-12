@@ -51,8 +51,11 @@ const MOTOR_DATA: Record<string, MotorBox> = {
   // (SM-S-I- solar motors use the CI rows, see MOTOR_PREFIX_ALIAS)
 };
 
+// Per Mahendra: "5 HP" is always 5.5 HP in practice.
+const MOTOR_HP_ALIAS: Record<number, number> = { 5: 5.5 };
+
 export function motorKey(material: MotorMaterial, size: MotorSize, hp: number): string {
-  return `${material}-${size}-${hp}`;
+  return `${material}-${size}-${MOTOR_HP_ALIAS[hp] ?? hp}`;
 }
 
 export function calcMotorBox(material: MotorMaterial, size: MotorSize, hp: number) {
