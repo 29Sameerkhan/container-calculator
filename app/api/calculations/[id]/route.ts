@@ -36,15 +36,9 @@ export async function GET(
 }
 
 export async function DELETE(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  // Refused outright while ADMIN_SECRET is unset, so a missing setting can't open this up
-  const ADMIN_SECRET = process.env.ADMIN_SECRET;
-  if (!ADMIN_SECRET || req.headers.get('x-admin-secret') !== ADMIN_SECRET) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
   // Strict check (not parseInt): "6abc" must be rejected, not treated as 6
   const id = Number(params.id);
   if (!Number.isInteger(id) || id <= 0) {

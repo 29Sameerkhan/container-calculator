@@ -1,12 +1,12 @@
 import type { Metadata } from 'next';
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { db } from '@/lib/db';
 import { calculations } from '@/lib/db/schema';
-import { claimShareToken, isShareToken } from '@/lib/db/shareToken';
+import { isShareToken } from '@/lib/db/shareToken';
 import { formatSavedAt } from '@/lib/format';
 import { ShipmentResult } from '@/lib/types';
 
@@ -37,14 +37,7 @@ export default async function PublicPlanPage({ params }: { params: { token: stri
         .limit(1)
     : [];
 
-  if (!row) {
-    // Lazy migration: a plan saved before tokens existed gets one the first time its
-    // number is requested. A plan that already has a token isn't reachable by number.
-    const id = /^\d+$/.test(token) ? Number(token) : 0;
-    const newToken = id > 0 ? await claimShareToken(id) : null;
-    if (newToken) redirect(`/plan/${newToken}`);
-    notFound();
-  }
+  if (!row) notFound();
 
   const result: ShipmentResult = JSON.parse(row.resultJson);
   const isConsolidated = (result.perCustomer?.length ?? 0) > 1;
