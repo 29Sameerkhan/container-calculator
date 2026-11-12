@@ -31,9 +31,6 @@ const MAX_STACKED_HEIGHT_MM = 2200;
 
 // Layered pallet height limit, wood base included
 const MAX_LAYERED_PALLET_HEIGHT_MM = 2200;
-// Motor-only pallets, wood included: their only limit, with no motor count cap.
-// Pump pallets stay at MAX_PALLET_GROSS_KG.
-const MAX_MOTOR_PALLET_GROSS_KG = 1500;
 
 // Pumps from different pools share a pallet only if their pool widths are this close
 const MAX_CROSS_POOL_WIDTH_GAP_MM = 100;
@@ -305,7 +302,7 @@ function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
   for (const item of [...items].sort((a, b) => b.quantity - a.quantity)) {
     // A single motor over the weight limit still gets a pallet of its own
     const perPallet = Math.max(1, Math.floor(
-      (MAX_MOTOR_PALLET_GROSS_KG - resolveWoodWeight(item, false)) / item.grossWeightKg
+      (MAX_PALLET_GROSS_KG - resolveWoodWeight(item, false)) / item.grossWeightKg
     ));
     for (let i = 0; i < Math.floor(item.quantity / perPallet); i++) {
       drafts.push({ skus: [{ item, qty: perPallet }], widthMm, motorOnly: true });
@@ -317,7 +314,7 @@ function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
   const clubbed: PalletSku[][] = [];
   // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
   for (const remainder of remainders.sort((a, b) => bottomLayerFirst(a.item, b.item))) {
-    const pallet = clubbed.find(skus => palletGrossKg([...skus, remainder]) <= MAX_MOTOR_PALLET_GROSS_KG);
+    const pallet = clubbed.find(skus => palletGrossKg([...skus, remainder]) <= MAX_PALLET_GROSS_KG);
     if (pallet) pallet.push(remainder);
     else clubbed.push([remainder]);
   }
