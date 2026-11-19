@@ -125,6 +125,7 @@ function buildLayers(skus: PalletSku[], widthMm: number): PalletLayer[] {
       rows,
       ...(sharedRowQty > 0 && { sharedRowQty }),
       lengthMm: item.boxLengthMm,
+      boxHeightMm: item.boxHeightMm,
       heightMm: rows * item.boxHeightMm,
       grossWeightKg: Math.round(item.grossWeightKg * qty * 10) / 10,
     };
