@@ -101,16 +101,31 @@ function boxesAcrossFor(item: OrderItem, widthMm: number): number {
   return Math.max(1, Math.floor(widthMm / item.boxWidthMm));
 }
 
+// Per Kiran sir (19 Nov 2026): different motor variants may share a row. A motor
+// layer first fills the part-filled top row of the motor layer below it (up to
+// MOTORS_PER_ROW across), then starts new rows. Pump rows are never shared.
 function buildLayers(skus: PalletSku[], widthMm: number): PalletLayer[] {
+  let openSlots = 0;        // free places in the top row of the layer below
+  let openRowHeightMm = 0;  // that row's height; 0 when it can't be shared
   return skus.map(({ item, qty }) => {
     const boxesAcross = boxesAcrossFor(item, widthMm);
-    const rows = Math.ceil(qty / boxesAcross);
+    const motor = isMotor(item);
+    const sharedRowQty = motor && item.boxHeightMm <= openRowHeightMm ? Math.min(openSlots, qty) : 0;
+    const rows = Math.ceil((qty - sharedRowQty) / boxesAcross);
+    if (rows > 0) {
+      openSlots = motor ? rows * boxesAcross - (qty - sharedRowQty) : 0;
+      openRowHeightMm = motor ? item.boxHeightMm : 0;
+    } else {
+      openSlots -= sharedRowQty;
+    }
     return {
       productCode: item.productCode,
       quantity: qty,
       boxesAcross,
       rows,
+      ...(sharedRowQty > 0 && { sharedRowQty }),
       lengthMm: item.boxLengthMm,
+      boxHeightMm: item.boxHeightMm,
       heightMm: rows * item.boxHeightMm,
       grossWeightKg: Math.round(item.grossWeightKg * qty * 10) / 10,
     };

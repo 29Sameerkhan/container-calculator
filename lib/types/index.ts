@@ -25,7 +25,9 @@ export interface PalletLayer {
   productCode: string;
   quantity: number;
   boxesAcross: number;
-  rows: number;
+  rows: number;            // rows this layer adds; boxes in a shared row are in sharedRowQty
+  sharedRowQty?: number;   // motors placed in the part-filled row of the layer below
+  boxHeightMm?: number;    // one row's height; absent on older saved results
   lengthMm: number;
   heightMm: number;
   grossWeightKg: number;

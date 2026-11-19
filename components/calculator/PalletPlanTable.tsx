@@ -114,7 +114,9 @@ export default function PalletPlanTable({ pallets }: Props) {
                     <td className="py-1 pr-4" colSpan={2}>{layer.productCode}</td>
                     <td className="py-1 pr-4 text-right">{layer.quantity}</td>
                     <td className="py-1 pr-4 text-right whitespace-nowrap" colSpan={4}>
-                      {layer.lengthMm.toLocaleString()} long · {layer.boxesAcross} across · {layer.rows} row{layer.rows > 1 ? 's' : ''} · {layer.heightMm} high
+                      {layer.lengthMm.toLocaleString()} long · {layer.boxesAcross} across
+                      {layer.sharedRowQty ? ` · ${layer.sharedRowQty} in layer ${i}'s top row` : ''}
+                      {layer.rows > 0 ? ` · ${layer.rows} row${layer.rows > 1 ? 's' : ''}` : ''} · {layer.heightMm} high
                     </td>
                     <td className="py-1 text-right">{layer.grossWeightKg.toLocaleString()}</td>
                   </tr>

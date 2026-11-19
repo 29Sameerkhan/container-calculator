@@ -4,7 +4,7 @@ import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { CONTAINERS, footprintLength, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
 import { PALLET_BASE_HEIGHT_MM } from '@/lib/constants';
 import { familyColorMap } from '@/lib/familyColors';
-import { PalletPlan, ShipmentResult } from '@/lib/types';
+import { PalletLayer, PalletPlan, ShipmentResult } from '@/lib/types';
 import {
   loadThree, Mesh, Object3D, OrbitControls, PerspectiveCamera, Raycaster, Scene, ThreeLib, Vector3, WebGLRenderer,
 } from '@/lib/loadThree';
@@ -102,6 +102,9 @@ function fitDistance(size: { l: number; h: number; w: number }, dir: { x: number
 // Wood base plus one box per layer, bottom first, from `floorMm` up. Gaps are taken
 // out of each layer's height so the top still lands on the pallet's real height.
 // Motor pallets and older saved results have no layers, so draw as one block.
+// A layer that shares the top row of the layer below (sharedRowQty) is drawn in
+// that row beside its boxes, at the row's height: the row is split across the
+// pallet width by box count, so nothing is drawn above the real pallet height.
 function palletBoxes(pallet: PalletPlan, x: number, z: number, floorMm: number) {
   // A saved result keeps the base height it was calculated with, so read it from
   // the pallet's own figures where they give it
@@ -111,22 +114,40 @@ function palletBoxes(pallet: PalletPlan, x: number, z: number, floorMm: number) 
   const parts: Array<Box & { wood: boolean }> = [
     { x, y: floorMm, z, l: pallet.lengthMm, h: base, w: pallet.widthMm, wood: true },
   ];
-  const layers = pallet.layers?.length
+  const layers: Array<Partial<PalletLayer> & { lengthMm: number; heightMm: number }> = pallet.layers?.length
     ? pallet.layers
     : [{ lengthMm: pallet.lengthMm, heightMm: pallet.heightMm - base }];
+  const block = (y: number, h: number, l: number, zFrom: number, w: number) =>
+    parts.push({ x, y: y + LAYER_GAP_MM, z: zFrom, l, h: Math.max(1, h - LAYER_GAP_MM), w, wood: false });
+
+  // The top row of the last layer drawn, while later layers may still share it
+  let openRow: { y: number; h: number; across: number; usedSlots: number } | null = null;
   let y = floorMm + base;
-  for (const layer of layers) {
-    parts.push({
-      x,
-      y: y + LAYER_GAP_MM,
-      z,
-      l: layer.lengthMm,
-      h: Math.max(1, layer.heightMm - LAYER_GAP_MM),
-      w: pallet.widthMm,
-      wood: false,
-    });
+  layers.forEach((layer, i) => {
+    const shared = layer.sharedRowQty ?? 0;
+    if (shared > 0 && openRow) {
+      const w = pallet.widthMm * shared / openRow.across;
+      block(openRow.y, openRow.h, layer.lengthMm, z + pallet.widthMm * openRow.usedSlots / openRow.across, w);
+      openRow.usedSlots += shared;
+    }
+    const rows = layer.rows ?? 1;
+    if (rows === 0) return;
+    const nextShares = (layers[i + 1]?.sharedRowQty ?? 0) > 0;
+    const across = layer.boxesAcross ?? 1;
+    const rowH = layer.boxHeightMm ?? layer.heightMm / rows;
+    const topRowQty = (layer.quantity ?? 0) - shared - (rows - 1) * across;
+    if (!nextShares || topRowQty <= 0) {
+      block(y, layer.heightMm, layer.lengthMm, z, pallet.widthMm);
+      openRow = null;
+    } else {
+      // Full rows as one block, then the part-filled top row at its share of the width
+      if (rows > 1) block(y, (rows - 1) * rowH, layer.lengthMm, z, pallet.widthMm);
+      const topY = y + (rows - 1) * rowH;
+      block(topY, rowH, layer.lengthMm, z, pallet.widthMm * topRowQty / across);
+      openRow = { y: topY, h: rowH, across, usedSlots: topRowQty };
+    }
     y += layer.heightMm;
-  }
+  });
   return parts;
 }
 
