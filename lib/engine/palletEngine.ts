@@ -7,10 +7,13 @@ import {
 } from '@/lib/types';
 import {
   CONTAINERS,
-  PUMP_PALLET_WIDTH,
-  MOTOR_PALLET_WIDTH,
+  PUMP_PALLET_FAMILIES,
+  PUMP_PALLET_WIDTH_MM,
+  MOTOR_PALLET_WIDTH_MM,
+  MOTORS_PER_ROW,
   WOOD_WEIGHT,
-  MAX_STACK_HEIGHT_MM,
+  MAX_PUMP_TOTAL_HEIGHT_MM,
+  MAX_MOTOR_TOTAL_HEIGHT_MM,
   PALLET_BASE_HEIGHT_MM,
   MAX_PALLET_GROSS_KG,
   MAX_STACKABLE_PALLET_KG,
@@ -29,9 +32,6 @@ export const CONTAINER_INNER_40HC = { lengthMm: 12032, widthMm: 2352, heightMm: 
 // Stacked pair height cap, pending the loading team's forklift clearance check
 const MAX_STACKED_HEIGHT_MM = 2200;
 
-// Layered pallet height limit, wood base included
-const MAX_LAYERED_PALLET_HEIGHT_MM = 2200;
-
 // Pumps from different pools share a pallet only if their pool widths are this close
 const MAX_CROSS_POOL_WIDTH_GAP_MM = 100;
 
@@ -46,17 +46,17 @@ function isMotor(item: OrderItem): boolean {
 
 
 export function resolvePalletWidth(item: OrderItem): number {
-  if (item.productType === 'motor-V4') return MOTOR_PALLET_WIDTH['V4'];
-  if (item.productType === 'motor-V6') return MOTOR_PALLET_WIDTH['V6'];
-  // No 8" pallet width from the factory yet; use the widest motor pallet
-  if (item.productType === 'motor-V8') return MOTOR_PALLET_WIDTH['V6'];
+  // One motor pallet width for every series (standardised per Kiran sir, 19 Nov 2026)
+  if (isMotor(item)) return MOTOR_PALLET_WIDTH_MM;
   if (item.productType === 'controller' || item.productType === 'spare') {
     console.warn('Controller/spare pallet width defaulting to 715mm — confirm with Mahendra');
     return 715;
   }
-  const width = PUMP_PALLET_WIDTH[item.palletFamily];
-  if (!width) throw new Error(`Unknown pallet family: ${item.palletFamily}`);
-  return width;
+  if (!PUMP_PALLET_FAMILIES.includes(item.palletFamily)) {
+    throw new Error(`Unknown pallet family: ${item.palletFamily}`);
+  }
+  // One pump pallet width for every family (standardised per Kiran sir, 19 Nov 2026)
+  return PUMP_PALLET_WIDTH_MM;
 }
 
 export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number {
@@ -74,9 +74,10 @@ export function computeMotorPalletGeometry(
   qty: number
 ): { lengthMm: number; widthMm: number; heightMm: number; motorsPerLayer: number; layers: number } {
   const palletWidthMm = resolvePalletWidth(item);
-  // As many motors across as the pallet width holds
-  const motorsPerLayer = Math.max(1, Math.floor(palletWidthMm / item.boxWidthMm));
-  const maxLayers = Math.floor((MAX_STACK_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
+  // Always 3 motors across, whatever the box width (Kiran sir, 19 Nov 2026)
+  const motorsPerLayer = MOTORS_PER_ROW;
+  // Motor pallet height cap is total from floor, wood base included
+  const maxLayers = Math.floor((MAX_MOTOR_TOTAL_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
   const layers = Math.max(1, Math.min(maxLayers, Math.ceil(qty / motorsPerLayer)));
   const columns = Math.ceil(qty / (motorsPerLayer * layers));
   const lengthMm = columns * item.boxLengthMm;
@@ -93,9 +94,16 @@ interface PalletDraft {
   motorOnly: boolean;
 }
 
+// Boxes side-by-side across a pallet of this width. Motors are always
+// MOTORS_PER_ROW across, on a pump pallet too (Kiran sir, 19 Nov 2026).
+function boxesAcrossFor(item: OrderItem, widthMm: number): number {
+  if (isMotor(item)) return MOTORS_PER_ROW;
+  return Math.max(1, Math.floor(widthMm / item.boxWidthMm));
+}
+
 function buildLayers(skus: PalletSku[], widthMm: number): PalletLayer[] {
   return skus.map(({ item, qty }) => {
-    const boxesAcross = Math.max(1, Math.floor(widthMm / item.boxWidthMm));
+    const boxesAcross = boxesAcrossFor(item, widthMm);
     const rows = Math.ceil(qty / boxesAcross);
     return {
       productCode: item.productCode,
@@ -175,7 +183,7 @@ function fitsOnePallet(skus: PalletSku[], widthMm: number): boolean {
   return (
     skus.every((layer, i) => i === 0 || canSitOn(layer, skus[i - 1])) &&
     palletGrossKg(skus) <= MAX_PALLET_GROSS_KG &&
-    layeredHeightMm(skus, widthMm) <= MAX_LAYERED_PALLET_HEIGHT_MM
+    layeredHeightMm(skus, widthMm) <= MAX_PUMP_TOTAL_HEIGHT_MM
   );
 }
 
@@ -238,8 +246,8 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
     const itemWidthMm = resolvePalletWidth(item);
     const boxesFitting = (usedKg: number, usedHeightMm: number, widthMm: number) => Math.min(
       Math.floor((MAX_PALLET_GROSS_KG - woodReserveKg - usedKg) / item.grossWeightKg),
-      Math.floor((MAX_LAYERED_PALLET_HEIGHT_MM - usedHeightMm) / item.boxHeightMm) *
-        Math.max(1, Math.floor(widthMm / item.boxWidthMm)),
+      Math.floor((MAX_PUMP_TOTAL_HEIGHT_MM - usedHeightMm) / item.boxHeightMm) *
+        boxesAcrossFor(item, widthMm),
     );
     // A single box over a limit still gets a pallet of its own
     const onNewPallet = Math.max(1, boxesFitting(0, PALLET_BASE_HEIGHT_MM, itemWidthMm));
@@ -394,7 +402,7 @@ function clubLeftovers(drafts: PalletDraft[]): PalletDraft[] {
       const clubbed = clubbedDraft(a, b);
       if (
         palletGrossKg(clubbed.skus) > MAX_PALLET_GROSS_KG ||
-        layeredHeightMm(clubbed.skus, clubbed.widthMm) > MAX_LAYERED_PALLET_HEIGHT_MM
+        layeredHeightMm(clubbed.skus, clubbed.widthMm) > MAX_PUMP_TOTAL_HEIGHT_MM
       ) continue;
       used.add(a);
       used.add(b);
@@ -632,8 +640,10 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
   const totalGrossKg = pallets.reduce((sum, p) => sum + p.totalGrossKg, 0);
 
   pallets.forEach((p) => {
-    if (p.heightMm > MAX_STACK_HEIGHT_MM) {
-      warnings.push(`${p.palletId}: height ${p.heightMm}mm exceeds max stack height ${MAX_STACK_HEIGHT_MM}mm`);
+    // Motor-only pallets have a motor family (SM-…) at the bottom
+    const maxHeightMm = p.family.startsWith('SM-') ? MAX_MOTOR_TOTAL_HEIGHT_MM : MAX_PUMP_TOTAL_HEIGHT_MM;
+    if (p.heightMm > maxHeightMm) {
+      warnings.push(`${p.palletId}: height ${p.heightMm}mm exceeds max pallet height ${maxHeightMm}mm`);
     }
     if (p.lengthMm > CONTAINER_INNER_40FT.lengthMm) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds 40ft inner length — no container fits it, arrange this pallet separately`);

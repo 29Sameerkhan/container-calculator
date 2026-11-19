@@ -4,24 +4,28 @@ export const CONTAINERS = {
   FCL_40FT: { maxCBM: 67.6, maxPayloadKg: 28000, tareKg: 3900 },
 };
 
-// Pump pallet width lookup by family
-export const PUMP_PALLET_WIDTH: Record<string, number> = {
-  'SK77': 920, 'SK95': 920,
-  'SK30': 770, 'SK46': 770,
-  'SK12': 720, 'SK13': 720, 'SK14': 720,
-  'SK17': 720, 'SK60': 720, 'SK60B': 720,
-  'SK09-large': 770,
-  'SK09-medium': 615, 'SK02': 615, 'SK03': 615,
-  'SK05': 515, 'SK09-small': 515,
-};
+// Pump pallet families the calculator knows (pick list and code recognition)
+export const PUMP_PALLET_FAMILIES: string[] = [
+  'SK77', 'SK95',
+  'SK30', 'SK46',
+  'SK12', 'SK13', 'SK14',
+  'SK17', 'SK60', 'SK60B',
+  'SK09-large',
+  'SK09-medium', 'SK02', 'SK03',
+  'SK05', 'SK09-small',
+];
 
-// Motor pallet width by series
-// V4 = 6" CI motors (narrower pallet): 770mm — verified from SK-02 packing list pallet W=770
-// V6 = 8" CI motors (wider pallet):   890mm — 5 motor boxes of 178mm across (was 1020 from SK-03 packing list)
-export const MOTOR_PALLET_WIDTH: Record<string, number> = {
-  'V4': 770,
-  'V6': 890,
-};
+// Pump pallet width (mm), one size for every family.
+// Standardised per Kiran sir, 19 Nov 2026
+export const PUMP_PALLET_WIDTH_MM = 1030;
+
+// Motor pallet width (mm), one size for every motor series.
+// Standardised per Kiran sir, 19 Nov 2026
+export const MOTOR_PALLET_WIDTH_MM = 750;
+
+// Motors packed side-by-side across a motor pallet: always 3, not derived from box width.
+// Standardised per Kiran sir, 19 Nov 2026
+export const MOTORS_PER_ROW = 3;
 
 // Wood weight constants (kg)
 export const WOOD_WEIGHT = {
@@ -32,8 +36,13 @@ export const WOOD_WEIGHT = {
   BOX_ACCESSORY: 10,
 };
 
-// Max stacking height inside container (mm)
-export const MAX_STACK_HEIGHT_MM = 2200;
+// Max pump pallet height (mm), total from floor: wood base + boxes (870mm of boxes).
+// Standardised per Kiran sir, 19 Nov 2026
+export const MAX_PUMP_TOTAL_HEIGHT_MM = 1050;
+
+// Max motor pallet height (mm), total from floor: wood base + boxes (900mm of boxes).
+// Standardised per Kiran sir, 19 Nov 2026
+export const MAX_MOTOR_TOTAL_HEIGHT_MM = 1080;
 
 // Wooden pallet base height (mm), added on top of stacked box height
 export const PALLET_BASE_HEIGHT_MM = 180;
