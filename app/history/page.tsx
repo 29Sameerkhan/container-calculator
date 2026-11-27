@@ -149,6 +149,8 @@ export default function HistoryPage() {
 
         {!loading && rows.length > 0 && (
           <div className="bg-white rounded-2xl border border-blue-100 shadow-sm overflow-hidden">
+            {/* Scrolls sideways when the table is wider than the page; the Actions
+                column stays pinned to the right edge so it is never out of view */}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -156,15 +158,17 @@ export default function HistoryPage() {
                     className="text-xs text-gray-500 uppercase tracking-wide border-b border-blue-100"
                     style={{ background: 'linear-gradient(90deg, #f0f4ff, #f8faff)' }}
                   >
-                    <th className="text-left px-4 py-3 font-medium">#</th>
-                    <th className="text-left px-4 py-3 font-medium">Customer</th>
-                    <th className="text-left px-4 py-3 font-medium">Order Ref</th>
-                    <th className="text-left px-4 py-3 font-medium">Container</th>
-                    <th className="text-right px-4 py-3 font-medium">CBM</th>
-                    <th className="text-right px-4 py-3 font-medium">Gross (kg)</th>
-                    <th className="text-right px-4 py-3 font-medium">Pallets</th>
-                    <th className="text-left px-4 py-3 font-medium">Saved At</th>
-                    <th className="text-right px-4 py-3 font-medium">Actions</th>
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap">#</th>
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Customer</th>
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Order Ref</th>
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Container</th>
+                    <th className="text-right px-4 py-3 font-medium whitespace-nowrap">CBM</th>
+                    <th className="text-right px-4 py-3 font-medium whitespace-nowrap">Gross (kg)</th>
+                    <th className="text-right px-4 py-3 font-medium whitespace-nowrap">Pallets</th>
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Saved At</th>
+                    <th className="sticky right-0 z-10 text-right px-4 py-3 font-medium whitespace-nowrap bg-[#f8faff] shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -172,10 +176,10 @@ export default function HistoryPage() {
                     <tr
                       key={row.id}
                       onClick={() => router.push('/history/' + row.id)}
-                      className="cursor-pointer hover:bg-blue-50/40 transition-colors"
+                      className="group cursor-pointer hover:bg-blue-50/40 transition-colors"
                     >
                       <td className="px-4 py-3 font-mono font-bold text-xs" style={{ color: '#1E4D8C' }}>#{row.id}</td>
-                      <td className="px-4 py-3 font-medium text-gray-800">
+                      <td className="px-4 py-3 font-medium text-gray-800 min-w-[10rem]">
                         {row.customerName || <span className="text-gray-400 italic">—</span>}
                       </td>
                       <td className="px-4 py-3 text-gray-600">
@@ -193,8 +197,9 @@ export default function HistoryPage() {
                       <td className="px-4 py-3 text-right text-xs">{row.totalGrossKg.toLocaleString()}</td>
                       <td className="px-4 py-3 text-right text-xs">{row.palletCount}</td>
                       <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{formatSavedAt(row.createdAt)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2">
+                      {/* Pinned right; opaque so scrolled columns pass underneath */}
+                      <td className="sticky right-0 px-4 py-3 bg-white group-hover:bg-[#f7f9ff] transition-colors shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">
+                        <div className="flex justify-end gap-2 min-w-max">
                           <button
                             onClick={e => { e.stopPropagation(); router.push(`/dashboard?edit=${row.id}`); }}
                             className="text-xs font-medium rounded-lg border px-2.5 py-1 whitespace-nowrap hover:opacity-80 transition-opacity"
