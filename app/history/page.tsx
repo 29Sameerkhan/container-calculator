@@ -3,6 +3,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { Search, X } from 'lucide-react';
 import { formatSavedAt } from '@/lib/format';
 
 interface CalculationRow {
@@ -153,6 +154,11 @@ export default function HistoryPage() {
         {/* Search: only once there is something to search */}
         {!loading && !error && rows.length > 0 && (
           <div className="relative">
+            <Search
+              size={16}
+              aria-hidden
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"
+            />
             <input
               type="text"
               value={search}
@@ -160,15 +166,15 @@ export default function HistoryPage() {
               onKeyDown={e => { if (e.key === 'Escape') setSearch(''); }}
               placeholder="Search by customer, order ref, or container…"
               aria-label="Search calculations by customer, order ref, or container"
-              className="w-full rounded-xl border border-blue-100 bg-white pl-4 pr-10 py-2.5 text-sm text-gray-800 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              className="w-full rounded-xl border border-blue-100 bg-white pl-10 pr-10 py-2.5 text-sm text-gray-800 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
             {search && (
               <button
                 onClick={() => setSearch('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-lg leading-none text-gray-400 hover:text-gray-600"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-gray-400 hover:text-gray-600"
                 aria-label="Clear search"
               >
-                ×
+                <X size={16} aria-hidden />
               </button>
             )}
           </div>
