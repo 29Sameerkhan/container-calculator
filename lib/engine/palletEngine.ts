@@ -835,10 +835,21 @@ export function computeShipment(
   const totalGrossKg = pallets.reduce((sum, p) => sum + p.totalGrossKg, 0);
 
   pallets.forEach((p) => {
-    // Motor-only pallets have a motor family (SM-…) at the bottom
-    const maxHeightMm = p.family.startsWith('SM-') ? cfg.maxMotorTotalHeightMm : cfg.maxPumpTotalHeightMm;
-    if (p.heightMm > maxHeightMm) {
-      warnings.push(`${p.palletId}: height ${p.heightMm}mm exceeds max pallet height ${maxHeightMm}mm`);
+    if (p.kind === 'crate') {
+      // A crate stands on the container floor with no pallet base: its limit is
+      // the container's interior height, not a pallet height cap
+      if (p.heightMm > CONTAINER_INNER_20FT.heightMm) {
+        warnings.push(
+          `${p.palletId}: Crate height ${p.heightMm.toLocaleString('en-US')}mm exceeds container interior height limit of ` +
+          `${CONTAINER_INNER_20FT.heightMm.toLocaleString('en-US')}mm`,
+        );
+      }
+    } else {
+      // Motor-only pallets have a motor family (SM-…) at the bottom
+      const maxHeightMm = p.family.startsWith('SM-') ? cfg.maxMotorTotalHeightMm : cfg.maxPumpTotalHeightMm;
+      if (p.heightMm > maxHeightMm) {
+        warnings.push(`${p.palletId}: height ${p.heightMm}mm exceeds max pallet height ${maxHeightMm}mm`);
+      }
     }
     if (p.lengthMm > CONTAINER_INNER_40FT.lengthMm) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds 40ft inner length — no container fits it, arrange this pallet separately`);

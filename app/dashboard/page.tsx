@@ -160,12 +160,6 @@ function DashboardInner() {
   // one can't claim the new one's record
   const saveGen = useRef(0);
   const [bannerMode, setBannerMode] = useState<'edit' | 'duplicate' | null>(null);
-  // Pending auto-reset after a save; cancelled if the page is left first, so it
-  // can't pull the user back to /dashboard from another page
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (resetTimer.current) clearTimeout(resetTimer.current);
-  }, []);
 
   const isMultiOrder = orders.length > 1;
   const liveRows = (order: OrderDraft) => rowsByOrder.current.get(order.id) ?? order.items;
@@ -392,9 +386,8 @@ function DashboardInner() {
       const links = shareUrl ? await presetLinks(shareUrl) : undefined;
       flushSync(() => setPdfData({ results: all, links }));
       await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), links && presetShareFooter(links, result.preset));
+      // The form stays as it is; New Calculation clears it
       setPdfStatus('done');
-      // Clear the form for the next calculation once the confirmation has been seen
-      resetTimer.current = setTimeout(handleReset, 2000);
     } catch (e) {
       console.error(e);
       setPdfStatus('error');
@@ -619,7 +612,7 @@ function DashboardInner() {
             <span title={saveBlockedReason ?? undefined} className={saveBlockedReason ? 'cursor-not-allowed' : undefined}>
             <button
               onClick={handleSave}
-              disabled={!!saveBlockedReason || presetBusy || saveStatus === 'saving' || pdfStatus === 'exporting' || pdfStatus === 'done'}
+              disabled={!!saveBlockedReason || presetBusy || saveStatus === 'saving' || pdfStatus === 'exporting'}
               aria-describedby={saveBlockedReason ? 'save-blocked-reason' : undefined}
               className={`bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-colors ${saveBlockedReason ? 'pointer-events-none' : ''}`}
             >
@@ -628,7 +621,7 @@ function DashboardInner() {
                 : pdfStatus === 'exporting'
                   ? 'Creating PDF…'
                   : pdfStatus === 'done'
-                    ? '✓ PDF downloaded'
+                    ? '✓ PDF downloaded — Download again'
                     : '💾 Save Calculation & Download PDF'}
             </button>
             </span>
