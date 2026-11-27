@@ -1,17 +1,22 @@
 'use client';
 
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { X } from 'lucide-react';
 import OrderItemForm, { isComplete, codeWarning } from '@/components/calculator/OrderItemForm';
-import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
-import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
+import { OrderItem, PalletPositions, RulePreset, ShipmentOrder, ShipmentResult } from '@/lib/types';
+import PresetSelector from '@/components/calculator/PresetSelector';
+import { DEFAULT_PRESET, isRulePreset, PRESET_CONFIGS } from '@/lib/constants';
+import { applyPositions, floorLayout, validateLayout } from '@/lib/engine/floorPlan';
 import ShareLinkButton from '@/components/calculator/ShareLinkButton';
 import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
-import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
+import { PdfCompanyHeader, PdfCoverDetails, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
+import PdfPresetSections from '@/components/calculator/PdfPresetSections';
+import { fetchAllPresetResults, PresetLinks, presetLinks, PresetResults, presetShareFooter } from '@/lib/presetResults';
 
 // One order card on the dashboard. `items` are the rows its form starts with
 // (empty for a new order, or loaded from a saved calculation); live edits are
@@ -68,6 +73,38 @@ async function saveCalculation(calculatedOrders: ShipmentOrder[], result: Shipme
   return data.id;
 }
 
+// Re-saves an already saved calculation in place (same id and share link)
+async function updateCalculation(id: number, calculatedOrders: ShipmentOrder[], result: ShipmentResult): Promise<number> {
+  const res = await fetch('/api/save-calculation', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, ...saveBody(calculatedOrders, result) }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Update failed');
+  return data.id;
+}
+
+async function runEngine(submitOrders: ShipmentOrder[], preset: RulePreset): Promise<ShipmentResult> {
+  const res = await fetch('/api/calculate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orders: submitOrders, preset }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.error || 'Calculation failed');
+  return data.result;
+}
+
+// The result as it should be stored: hand-moved floor positions written into
+// placed, so history, the share link and the PDF all draw the edited layout
+function withLayout(result: ShipmentResult, positions: PalletPositions): ShipmentResult {
+  if (Object.keys(positions).length === 0) return result;
+  const layout = floorLayout(result.pallets, result.containerRecommendation, result.placed);
+  if (!layout) return result;
+  return { ...result, placed: applyPositions(layout.placed, positions, layout.containerLength), manualLayout: true };
+}
+
 const INPUT_CLASS =
   'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
 
@@ -99,10 +136,27 @@ function DashboardInner() {
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'done' | 'error'>('idle');
   // The results block the PDF is captured from
   const planRef = useRef<HTMLDivElement>(null);
+  // The plan under all three presets, drawn into the PDF only while it is captured
+  const [pdfData, setPdfData] = useState<{ results: PresetResults; links?: PresetLinks } | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   // Orders the current result was calculated from — what Save stores
   const [calculatedOrders, setCalculatedOrders] = useState<ShipmentOrder[]>([]);
   const [editBanner, setEditBanner] = useState<string | null>(null);
+  // Packing rules; changing them re-runs the engine on the calculated orders
+  const [preset, setPreset] = useState<RulePreset>(DEFAULT_PRESET);
+  const [presetBusy, setPresetBusy] = useState(false);
+  // Floor positions moved by hand in the floor plan editor, keyed by floor pallet
+  const [positions, setPositions] = useState<PalletPositions>({});
+  // Moves made since the result was last saved
+  const [layoutDirty, setLayoutDirty] = useState(false);
+  // Only the latest engine run may set the result (presets can be switched quickly)
+  const runSeq = useRef(0);
+  // The save in flight, so a re-save waits for it and updates the same record
+  const pendingSave = useRef<Promise<number | null> | null>(null);
+  const savedIdRef = useRef<number | null>(null);
+  // Bumped when a new calculation starts, so a save still in flight for the old
+  // one can't claim the new one's record
+  const saveGen = useRef(0);
   const [bannerMode, setBannerMode] = useState<'edit' | 'duplicate' | null>(null);
   // Pending auto-reset after a save; cancelled if the page is left first, so it
   // can't pull the user back to /dashboard from another page
@@ -139,11 +193,17 @@ function DashboardInner() {
           : [makeOrder(calc.customerName, calc.orderRef, calc.items)];
         rowsByOrder.current = new Map();
         setOrders(loaded);
+        setPreset(isRulePreset(calc.result?.preset) ? calc.result.preset : DEFAULT_PRESET);
+        setPositions({});
+        setLayoutDirty(false);
         setResult(null);
         setCalculatedOrders([]);
         setError(null);
         setSaveStatus('idle');
         setSavedId(null);
+        savedIdRef.current = null;
+        pendingSave.current = null;
+        saveGen.current++;
         setBannerMode(mode);
         setEditBanner(
           mode === 'edit'
@@ -175,21 +235,76 @@ function DashboardInner() {
     setOrders(prev => prev.filter(o => o.id !== orderId));
   }
 
+  // Saves the result to history: a new record the first time, then the same
+  // record updated (so its id and share link stay the same). Returns the id, or
+  // null if the save failed.
+  async function persist(submitOrders: ShipmentOrder[], calculated: ShipmentResult): Promise<number | null> {
+    const previous = pendingSave.current;
+    const gen = saveGen.current;
+    const run = (async () => {
+      await previous;
+      if (gen !== saveGen.current) return null;
+      setSaveStatus('saving');
+      try {
+        const existing = savedIdRef.current;
+        const id = existing
+          ? await updateCalculation(existing, submitOrders, calculated)
+          : await saveCalculation(submitOrders, calculated);
+        if (gen !== saveGen.current) return null;
+        savedIdRef.current = id;
+        setSavedId(id);
+        setSaveStatus('saved');
+        return id;
+      } catch (e) {
+        console.error(e);
+        if (gen === saveGen.current) setSaveStatus('error');
+        return null;
+      }
+    })();
+    pendingSave.current = run;
+    return run;
+  }
+
   async function autoSave(submitOrders: ShipmentOrder[], calculated: ShipmentResult) {
-    setSaveStatus('saving');
+    await persist(submitOrders, calculated);
+  }
+
+  // A new preset re-runs the engine on the orders already calculated and updates
+  // the saved record. Hand-moved positions belong to the old pallets, so they go.
+  async function handlePresetChange(next: RulePreset) {
+    setPreset(next);
+    if (!result || calculatedOrders.length === 0) return;
+    const seq = ++runSeq.current;
+    setPresetBusy(true);
+    setError(null);
     try {
-      setSavedId(await saveCalculation(submitOrders, calculated));
-      setSaveStatus('saved');
+      const calculated = await runEngine(calculatedOrders, next);
+      if (seq !== runSeq.current) return;
+      setResult(calculated);
+      setPositions({});
+      setLayoutDirty(false);
+      setPdfStatus('idle');
+      void autoSave(calculatedOrders, calculated);
     } catch (e) {
-      console.error(e);
-      setSaveStatus('error');
+      if (seq === runSeq.current) setError(e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      if (seq === runSeq.current) setPresetBusy(false);
     }
+  }
+
+  function handlePositionsChange(next: PalletPositions) {
+    setPositions(next);
+    setLayoutDirty(true);
+    setPdfStatus('idle');
   }
 
   async function handleCalculate() {
     setSaveStatus('idle');
     setPdfStatus('idle');
     setSavedId(null);
+    savedIdRef.current = null;
+    pendingSave.current = null;
+    saveGen.current++;
     const submitOrders: ShipmentOrder[] = orders.map(o => ({
       customerName: o.customerName,
       orderRef: o.orderRef,
@@ -212,21 +327,20 @@ function DashboardInner() {
     }
     setLoading(true);
     setError(null);
+    const seq = ++runSeq.current;
     try {
-      const res = await fetch('/api/calculate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orders: submitOrders }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || 'Calculation failed');
-      setResult(data.result);
+      const calculated = await runEngine(submitOrders, preset);
+      if (seq !== runSeq.current) return;
+      setResult(calculated);
       setCalculatedOrders(submitOrders);
-      void autoSave(submitOrders, data.result);
+      setPositions({});
+      setLayoutDirty(false);
+      void autoSave(submitOrders, calculated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unknown error');
+      if (seq === runSeq.current) setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setLoading(false);
+      setPresetBusy(false);
     }
   }
 
@@ -240,6 +354,14 @@ function DashboardInner() {
     setSaveStatus('idle');
     setPdfStatus('idle');
     setSavedId(null);
+    savedIdRef.current = null;
+    pendingSave.current = null;
+    saveGen.current++;
+    runSeq.current++;
+    setPreset(DEFAULT_PRESET);
+    setPresetBusy(false);
+    setPositions({});
+    setLayoutDirty(false);
     setEditBanner(null);
     setBannerMode(null);
     router.replace('/dashboard');
@@ -248,31 +370,49 @@ function DashboardInner() {
   // The calculation is already in history (auto-saved); this retries the save
   // if that failed, then downloads the plan on screen as a PDF
   async function handleSave() {
-    if (!result || calculatedOrders.length === 0 || !planRef.current) return;
+    if (!result || calculatedOrders.length === 0 || !planRef.current || layoutErrors.length > 0) return;
     let id = savedId;
-    if (saveStatus !== 'saved') {
-      setSaveStatus('saving');
-      try {
-        id = await saveCalculation(calculatedOrders, result);
-        setSavedId(id);
-        setSaveStatus('saved');
-      } catch (e) {
-        console.error(e);
-        setSaveStatus('error');
-        return;
-      }
+    // Re-save when the auto-save failed, or to store floor moves made since
+    if (saveStatus !== 'saved' || layoutDirty) {
+      id = await persist(calculatedOrders, withLayout(result, positions));
+      if (id === null) return;
+      setLayoutDirty(false);
     }
     setPdfStatus('exporting');
     try {
-      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), id ? await planShareUrlForPdf(id) : undefined);
+      // The PDF holds the plan under every preset, whichever one is selected here;
+      // the current preset's section keeps any floor moves
+      const [all, shareUrl] = await Promise.all([
+        fetchAllPresetResults(calculatedOrders, withLayout(result, positions)),
+        id ? planShareUrlForPdf(id) : Promise.resolve(undefined),
+      ]);
+      // Each preset section links to its own 3D page: /plan/{token}?preset=…
+      const links = shareUrl ? await presetLinks(shareUrl) : undefined;
+      flushSync(() => setPdfData({ results: all, links }));
+      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), links && presetShareFooter(links, result.preset));
       setPdfStatus('done');
       // Clear the form for the next calculation once the confirmation has been seen
       resetTimer.current = setTimeout(handleReset, 2000);
     } catch (e) {
       console.error(e);
       setPdfStatus('error');
+    } finally {
+      setPdfData(null);
     }
   }
+
+  // Floor plan checks for the current layout; errors block Save / Export
+  const maxPalletGrossKg = PRESET_CONFIGS[result?.preset ?? preset].maxPalletGrossKg;
+  const layoutErrors = useMemo(() => {
+    if (!result) return [];
+    const layout = floorLayout(result.pallets, result.containerRecommendation, result.placed);
+    if (!layout) return [];
+    const placedNow = applyPositions(layout.placed, positions, layout.containerLength);
+    return validateLayout(placedNow, layout.containerLength, maxPalletGrossKg).filter(i => i.severity === 'error');
+  }, [result, positions, maxPalletGrossKg]);
+  const saveBlockedReason = layoutErrors.length > 0
+    ? `Fix ${layoutErrors.length} floor plan error${layoutErrors.length > 1 ? 's' : ''} before saving: ${layoutErrors[0].message}`
+    : null;
 
   // Shown on the summary card: one customer as-is, several joined
   const displayName = orders.map(o => o.customerName).filter(Boolean).join(' + ');
@@ -403,6 +543,10 @@ function DashboardInner() {
           + Add Another Order
         </button>
 
+        {/* Packing rules, always above Calculate: they apply to the next calculation
+            and re-run the current one when changed */}
+        <PresetSelector value={preset} onChange={p => { void handlePresetChange(p); }} busy={presetBusy} />
+
         {/* Calculate button */}
         {(totalLines > 0 || error) && (
           <div className="flex items-center gap-4">
@@ -443,23 +587,39 @@ function DashboardInner() {
               planId={savedId}
               date={new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}
             />
-            <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
-            <PdfOrderLines orders={calculatedOrders} />
-            <ContainerViewTabs
-              pallets={result.pallets}
-              recommendation={result.containerRecommendation}
-              placed={result.placed}
+            <PdfCoverDetails
+              customerName={displayName}
+              orderRef={displayRef}
+              date={new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}
             />
-            <PalletPlanTable pallets={result.pallets} />
+            {/* On screen: the selected preset. The PDF has its own section per preset. */}
+            <div data-pdf-hide className="space-y-4">
+              <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
+            </div>
+            <PdfOrderLines orders={calculatedOrders} />
+            <div data-pdf-hide>
+              <ContainerViewTabs
+                pallets={result.pallets}
+                recommendation={result.containerRecommendation}
+                placed={result.placed}
+                positions={positions}
+                onPositionsChange={handlePositionsChange}
+                maxPalletGrossKg={maxPalletGrossKg}
+              />
+            </div>
+            <PdfPresetSections results={pdfData?.results ?? null} links={pdfData?.links} />
           </div>
         )}
 
         {result && (
           <div className="flex items-center gap-3">
+            {/* A disabled button gets no hover events, so the tooltip sits on a wrapper */}
+            <span title={saveBlockedReason ?? undefined} className={saveBlockedReason ? 'cursor-not-allowed' : undefined}>
             <button
               onClick={handleSave}
-              disabled={saveStatus === 'saving' || pdfStatus === 'exporting' || pdfStatus === 'done'}
-              className="bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-colors"
+              disabled={!!saveBlockedReason || presetBusy || saveStatus === 'saving' || pdfStatus === 'exporting' || pdfStatus === 'done'}
+              aria-describedby={saveBlockedReason ? 'save-blocked-reason' : undefined}
+              className={`bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-colors ${saveBlockedReason ? 'pointer-events-none' : ''}`}
             >
               {saveStatus === 'saving'
                 ? 'Saving…'
@@ -469,6 +629,15 @@ function DashboardInner() {
                     ? '✓ PDF downloaded'
                     : '💾 Save Calculation & Download PDF'}
             </button>
+            </span>
+            {saveBlockedReason && (
+              <p id="save-blocked-reason" className="text-sm text-red-600">
+                Save blocked — {layoutErrors.length} floor plan error{layoutErrors.length > 1 ? 's' : ''}
+              </p>
+            )}
+            {!saveBlockedReason && layoutDirty && (
+              <p className="text-sm text-blue-700">Floor layout changed — Save to keep it in history and the share link</p>
+            )}
             {saveStatus === 'saved' && savedId && (
               <>
                 <p className="text-sm text-green-700">Saved to history as #{savedId}</p>

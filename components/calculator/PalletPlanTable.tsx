@@ -3,6 +3,7 @@
 import { Fragment } from 'react';
 import { PalletPlan } from '@/lib/types';
 import { toFloorUnits } from '@/lib/engine/floorPlan';
+import { palletCountLabel } from '@/lib/format';
 
 interface Props {
   pallets: PalletPlan[];
@@ -35,7 +36,7 @@ export default function PalletPlanTable({ pallets }: Props) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
       <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
-        Pallet Plan — {pallets.length} pallet{pallets.length > 1 ? 's' : ''}
+        Pallet Plan — {palletCountLabel(pallets)}
         {stackedPairs > 0 && (
           <span className="ml-2 normal-case font-normal text-gray-500">
             · {stackedPairs} stacked pair{stackedPairs > 1 ? 's' : ''} ({rows.length} floor positions)
@@ -70,6 +71,12 @@ export default function PalletPlanTable({ pallets }: Props) {
                 <tr className={`hover:bg-gray-50 transition-colors ${top ? 'bg-amber-50/40' : ''}`}>
                   <td className="py-2.5 pr-4 font-mono text-xs font-semibold text-gray-700 whitespace-nowrap">
                     {top ? `${p.palletId} + ${top.palletId}` : p.palletId}
+                    {/* Crates are loose boxes in a wooden crate, not on a pallet */}
+                    {p.kind === 'crate' && (
+                      <span className="ml-2 font-sans text-[10px] font-semibold bg-stone-200 text-stone-700 rounded px-1.5 py-0.5 uppercase">
+                        Crate
+                      </span>
+                    )}
                     {top && (
                       <span
                         className="ml-2 font-sans text-[10px] font-semibold bg-amber-100 text-amber-700 rounded px-1.5 py-0.5"
@@ -114,7 +121,9 @@ export default function PalletPlanTable({ pallets }: Props) {
                     <td className="py-1 pr-4" colSpan={2}>{layer.productCode}</td>
                     <td className="py-1 pr-4 text-right">{layer.quantity}</td>
                     <td className="py-1 pr-4 text-right whitespace-nowrap" colSpan={4}>
-                      {layer.lengthMm.toLocaleString()} long · {layer.boxesAcross} across · {layer.rows} row{layer.rows > 1 ? 's' : ''} · {layer.heightMm} high
+                      {layer.lengthMm.toLocaleString()} long · {layer.boxesAcross} across
+                      {layer.sharedRowQty ? ` · ${layer.sharedRowQty} in layer ${i}'s top row` : ''}
+                      {layer.rows > 0 ? ` · ${layer.rows} row${layer.rows > 1 ? 's' : ''}` : ''} · {layer.heightMm} high
                     </td>
                     <td className="py-1 text-right">{layer.grossWeightKg.toLocaleString()}</td>
                   </tr>

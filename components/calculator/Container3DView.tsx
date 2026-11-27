@@ -1,10 +1,10 @@
 'use client';
 
 import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { CONTAINERS, footprintLength, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
+import { applyPositions, CONTAINERS, footprintLength, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
 import { PALLET_BASE_HEIGHT_MM } from '@/lib/constants';
 import { familyColorMap } from '@/lib/familyColors';
-import { PalletPlan, ShipmentResult } from '@/lib/types';
+import { PalletLayer, PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
 import {
   loadThree, Mesh, Object3D, OrbitControls, PerspectiveCamera, Raycaster, Scene, ThreeLib, Vector3, WebGLRenderer,
 } from '@/lib/loadThree';
@@ -13,6 +13,9 @@ interface Props {
   pallets: PalletPlan[];
   recommendation: ShipmentResult['containerRecommendation'];
   placed?: PlacedPallet[];
+  // Hand-set floor positions from the floor plan editor (mm from the front-left
+  // corner, keyed by a footprint's floor pallet); used over the auto layout
+  palletPositions?: PalletPositions;
   // False while another tab is showing: the render loop is paused
   active: boolean;
 }
@@ -102,7 +105,14 @@ function fitDistance(size: { l: number; h: number; w: number }, dir: { x: number
 // Wood base plus one box per layer, bottom first, from `floorMm` up. Gaps are taken
 // out of each layer's height so the top still lands on the pallet's real height.
 // Motor pallets and older saved results have no layers, so draw as one block.
+// A layer that shares the top row of the layer below (sharedRowQty) is drawn in
+// that row beside its boxes, at the row's height: the row is split across the
+// pallet width by box count, so nothing is drawn above the real pallet height.
 function palletBoxes(pallet: PalletPlan, x: number, z: number, floorMm: number) {
+  // A crate is one wooden box standing on the floor: no pallet base, no layers
+  if (pallet.kind === 'crate') {
+    return [{ x, y: floorMm, z, l: pallet.lengthMm, h: pallet.heightMm, w: pallet.widthMm, wood: false }];
+  }
   // A saved result keeps the base height it was calculated with, so read it from
   // the pallet's own figures where they give it
   const base = pallet.layers?.length
@@ -111,30 +121,50 @@ function palletBoxes(pallet: PalletPlan, x: number, z: number, floorMm: number) 
   const parts: Array<Box & { wood: boolean }> = [
     { x, y: floorMm, z, l: pallet.lengthMm, h: base, w: pallet.widthMm, wood: true },
   ];
-  const layers = pallet.layers?.length
+  const layers: Array<Partial<PalletLayer> & { lengthMm: number; heightMm: number }> = pallet.layers?.length
     ? pallet.layers
     : [{ lengthMm: pallet.lengthMm, heightMm: pallet.heightMm - base }];
+  const block = (y: number, h: number, l: number, zFrom: number, w: number) =>
+    parts.push({ x, y: y + LAYER_GAP_MM, z: zFrom, l, h: Math.max(1, h - LAYER_GAP_MM), w, wood: false });
+
+  // The top row of the last layer drawn, while later layers may still share it
+  let openRow: { y: number; h: number; across: number; usedSlots: number } | null = null;
   let y = floorMm + base;
-  for (const layer of layers) {
-    parts.push({
-      x,
-      y: y + LAYER_GAP_MM,
-      z,
-      l: layer.lengthMm,
-      h: Math.max(1, layer.heightMm - LAYER_GAP_MM),
-      w: pallet.widthMm,
-      wood: false,
-    });
+  layers.forEach((layer, i) => {
+    const shared = layer.sharedRowQty ?? 0;
+    if (shared > 0 && openRow) {
+      const w = pallet.widthMm * shared / openRow.across;
+      block(openRow.y, openRow.h, layer.lengthMm, z + pallet.widthMm * openRow.usedSlots / openRow.across, w);
+      openRow.usedSlots += shared;
+    }
+    const rows = layer.rows ?? 1;
+    if (rows === 0) return;
+    const nextShares = (layers[i + 1]?.sharedRowQty ?? 0) > 0;
+    const across = layer.boxesAcross ?? 1;
+    const rowH = layer.boxHeightMm ?? layer.heightMm / rows;
+    const topRowQty = (layer.quantity ?? 0) - shared - (rows - 1) * across;
+    if (!nextShares || topRowQty <= 0) {
+      block(y, layer.heightMm, layer.lengthMm, z, pallet.widthMm);
+      openRow = null;
+    } else {
+      // Full rows as one block, then the part-filled top row at its share of the width
+      if (rows > 1) block(y, (rows - 1) * rowH, layer.lengthMm, z, pallet.widthMm);
+      const topY = y + (rows - 1) * rowH;
+      block(topY, rowH, layer.lengthMm, z, pallet.widthMm * topRowQty / across);
+      openRow = { y: topY, h: rowH, across, usedSlots: topRowQty };
+    }
     y += layer.heightMm;
-  }
+  });
   return parts;
 }
 
-export default function Container3DView({ pallets, recommendation, placed: savedPlaced, active }: Props) {
+export default function Container3DView({ pallets, recommendation, placed: savedPlaced, palletPositions, active }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hovered = useRef<{ id: string; meshes: Mesh[] } | null>(null);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+  // What the camera was last framed for: moving pallets keeps the user's view
+  const framedFor = useRef<{ stage: Stage; pallets: PalletPlan[]; length: number } | null>(null);
 
   const [three, setThree] = useState<ThreeLib | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
@@ -153,8 +183,11 @@ export default function Container3DView({ pallets, recommendation, placed: saved
   const container = CONTAINERS[containerKey];
 
   const placed = useMemo(
-    () => (isLcl ? null : savedPlaced) ?? packPallets(pallets, container.LENGTH),
-    [isLcl, savedPlaced, pallets, container.LENGTH],
+    () => {
+      const auto = (isLcl ? null : savedPlaced) ?? packPallets(pallets, container.LENGTH);
+      return isLcl ? auto : applyPositions(auto, palletPositions, container.LENGTH);
+    },
+    [isLcl, savedPlaced, pallets, container.LENGTH, palletPositions],
   );
 
   const familyColors = useMemo(() => familyColorMap(pallets), [pallets]);
@@ -292,8 +325,12 @@ export default function Container3DView({ pallets, recommendation, placed: saved
         : [{ pallet: p.pallet, floorMm: 0 }];
       for (const { pallet, floorMm } of stack) {
         const familyColor = p.overflow ? OVERFLOW_COLOR : (familyColors[pallet.family] ?? '#94a3b8');
-        for (const { wood, ...box } of palletBoxes(pallet, p.x, p.y, floorMm)) {
-          addBox(box, wood ? WOOD_COLOR : familyColor, pallet.palletId);
+        for (const { wood, ...box } of palletBoxes(pallet, 0, 0, floorMm)) {
+          // Built at the origin, then placed; a pallet turned 90° swaps length and width
+          const placedBox = p.rotated
+            ? { ...box, x: p.x + box.z, z: p.y + box.x, l: box.w, w: box.l }
+            : { ...box, x: p.x + box.x, z: p.y + box.z };
+          addBox(placedBox, wood ? WOOD_COLOR : familyColor, pallet.palletId);
         }
       }
     }
@@ -303,21 +340,28 @@ export default function Container3DView({ pallets, recommendation, placed: saved
     stage.solids = solids;
     stage.bounds = { l: extentL, h: H, w: W };
 
-    // Opening view: above and to the front-right, far enough to frame everything
+    // Opening view: above and to the front-right, far enough to frame everything.
+    // Only for a new result or container: a pallet moved in the floor plan editor
+    // rebuilds the scene but leaves the camera where the user put it.
+    const last = framedFor.current;
+    const reframe = !last || last.stage !== stage || last.pallets !== pallets || last.length !== L;
+    framedFor.current = { stage, pallets, length: L };
     const dir = { x: 0.5, y: 0.42, z: 0.757 }; // unit length
     const distance = FRAME_MARGIN * fitDistance({ l: extentL, h: H, w: W }, dir, camera.aspect);
     const radius = Math.hypot(extentL, H, W) / 2;
-    controls.target.set(extentL / 2, H / 2, W / 2);
-    camera.position.set(
-      controls.target.x + dir.x * distance,
-      controls.target.y + dir.y * distance,
-      controls.target.z + dir.z * distance,
-    );
-    controls.minDistance = 1500;
-    controls.maxDistance = distance * 2.5;
-    camera.far = controls.maxDistance + radius * 2;
-    camera.updateProjectionMatrix();
-    controls.update();
+    if (reframe) {
+      controls.target.set(extentL / 2, H / 2, W / 2);
+      camera.position.set(
+        controls.target.x + dir.x * distance,
+        controls.target.y + dir.y * distance,
+        controls.target.z + dir.z * distance,
+      );
+      controls.minDistance = 1500;
+      controls.maxDistance = distance * 2.5;
+      camera.far = controls.maxDistance + radius * 2;
+      camera.updateProjectionMatrix();
+      controls.update();
+    }
     stage.safePosition = null;
     stage.safeTarget = null;
 
@@ -329,7 +373,7 @@ export default function Container3DView({ pallets, recommendation, placed: saved
       stage.solids = [];
       disposables.forEach(d => d.dispose());
     };
-  }, [stage, placed, familyColors, container]);
+  }, [stage, placed, pallets, familyColors, container]);
 
   // Render loop: runs only while this tab is showing
   useEffect(() => {

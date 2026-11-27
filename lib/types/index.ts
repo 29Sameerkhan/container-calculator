@@ -25,7 +25,9 @@ export interface PalletLayer {
   productCode: string;
   quantity: number;
   boxesAcross: number;
-  rows: number;
+  rows: number;            // rows this layer adds; boxes in a shared row are in sharedRowQty
+  sharedRowQty?: number;   // motors placed in the part-filled row of the layer below
+  boxHeightMm?: number;    // one row's height; absent on older saved results
   lengthMm: number;
   heightMm: number;
   grossWeightKg: number;
@@ -55,6 +57,7 @@ export interface PalletPlan {
   stackedWith?: string;
   stackPosition?: 'bottom' | 'top';
   isLongPallet?: boolean;
+  kind?: 'crate';          // a wooden crate of loose boxes (no pallet base); absent for a pallet
 }
 
 export interface PlacedPallet {
@@ -91,4 +94,33 @@ export interface ShipmentResult {
   warnings: string[];
   containersNeeded?: number;
   containerLoads?: ContainerLoad[];  // only for MULTI_CONTAINER; the first is the drawn floor plan
+  preset?: RulePreset;               // rules the plan was packed with; absent on older saved results (standard)
+  manualLayout?: boolean;            // placed holds positions moved by hand in the floor plan editor
 }
+
+// ─── Rule presets ────────────────────────────────────────────────────────────
+// Pallet-level limits the engine packs to. Container payload caps never change.
+export type RulePreset = 'standard' | 'relaxed' | 'freepack';
+
+export interface PresetConfig {
+  pumpPalletWidthMm: number;
+  motorPalletWidthMm: number;
+  maxPumpTotalHeightMm: number;
+  maxMotorTotalHeightMm: number;
+  maxPalletGrossKg: number;
+  maxPalletLengthMm: number;   // max pallet footprint length (the dimension that runs along the container floor)
+  allowCrossFamily: boolean;   // if true, pumps and motors can share a pallet
+  motorsPerRow: number;        // motors side by side across a motor pallet
+  motorQtyPerPallet: number;   // target motors per motor pallet; Infinity = limited by height/weight only
+  v4MotorsInCrates: boolean;   // V4 motors go in wooden crates (no pallet base) instead of on pallets
+  rotatePalletsOnFloor: boolean; // floor packing may turn pallets 90° and fill rows best-fit
+}
+
+// A pallet's floor position set by hand in the floor plan editor: mm from the
+// container's front-left corner (x along the length, y across the width)
+export interface FloorPosition {
+  x: number;
+  y: number;
+}
+
+export type PalletPositions = Record<string, FloorPosition>;

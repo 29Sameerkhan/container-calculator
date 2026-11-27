@@ -1,7 +1,8 @@
 'use client';
 
 import { ShipmentResult } from '@/lib/types';
-import { CONTAINERS, LCL_SUGGEST_BELOW_KG } from '@/lib/constants';
+import { CONTAINERS, LCL_SUGGEST_BELOW_KG, PRESET_LABELS } from '@/lib/constants';
+import { palletCountLabel } from '@/lib/format';
 
 interface Props {
   result: ShipmentResult;
@@ -43,6 +44,11 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">Recommendation</p>
           <p className={`text-3xl font-bold ${rec.color}`}>{label}</p>
+          {/* Results saved before presets existed were packed with the Standard rules */}
+          <p className="mt-1 inline-block rounded-md border border-gray-300 bg-white/70 px-2 py-0.5 text-xs font-medium text-gray-600">
+            Rules: {PRESET_LABELS[result.preset ?? 'standard']}
+            {result.manualLayout && ' · floor layout adjusted by hand'}
+          </p>
           {customerName && (
             <p className="text-sm text-gray-600 mt-1">{customerName}{orderRef ? ` · ${orderRef}` : ''}</p>
           )}
@@ -73,7 +79,9 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
       <div className="mt-4 grid grid-cols-3 gap-4 pt-4 border-t border-current/10">
         <div>
           <p className="text-xs text-gray-500">Total Pallets</p>
-          <p className="text-lg font-semibold text-gray-800">{result.pallets.length}</p>
+          <p className="text-lg font-semibold text-gray-800">
+            {result.pallets.some(p => p.kind === 'crate') ? palletCountLabel(result.pallets) : result.pallets.length}
+          </p>
         </div>
         <div>
           <p className="text-xs text-gray-500">Net Weight</p>

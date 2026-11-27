@@ -31,13 +31,21 @@ export async function planShareUrlForPdf(id: number): Promise<string | undefined
   }
 }
 
-// shareUrl adds a link and QR code at the bottom of the last page
-export async function exportPlanPdf(element: HTMLElement, filename: string, shareUrl?: string): Promise<void> {
+// The plan's public 3D page, at the bottom of the last page: a QR code for
+// qrUrl and clickable links (e.g. one per rule preset)
+export interface PdfShareFooter {
+  qrUrl: string;
+  links: Array<{ label: string; url: string }>;
+}
+
+export async function exportPlanPdf(element: HTMLElement, filename: string, share?: PdfShareFooter): Promise<void> {
   const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
 
   const width = Math.max(element.scrollWidth, ...Array.from(element.querySelectorAll<HTMLElement>('.overflow-x-auto')).map(el => el.scrollWidth));
   // Parts a page break shouldn't cut through, in canvas pixels from the top
   let keepTogether: { top: number; bottom: number }[] = [];
+  // Tops of parts that always start a new page (data-pdf-page-break), in canvas pixels
+  let pageBreaks: number[] = [];
   const canvas = await html2canvas(element, {
     scale: CAPTURE_SCALE,
     backgroundColor: '#ffffff',
@@ -63,6 +71,9 @@ export async function exportPlanPdf(element: HTMLElement, filename: string, shar
         const rect = el.getBoundingClientRect();
         return { top: (rect.top - origin) * CAPTURE_SCALE, bottom: (rect.bottom - origin) * CAPTURE_SCALE };
       });
+      pageBreaks = Array.from(clone.querySelectorAll<HTMLElement>('[data-pdf-page-break]'))
+        .map(el => (el.getBoundingClientRect().top - origin) * CAPTURE_SCALE)
+        .sort((a, b) => a - b);
     },
   });
 
@@ -77,7 +88,9 @@ export async function exportPlanPdf(element: HTMLElement, filename: string, shar
     const end = Math.min(top + pxPerPage, canvas.height);
     // A part the page would cut starts the next page instead (if it isn't at the top of this one)
     const cut = keepTogether.find(k => k.top > top && k.top < end && k.bottom > end);
-    sliceH = Math.round((cut ? cut.top : end) - top);
+    // A forced break inside this page ends it there (one at the very top is already met)
+    const forced = pageBreaks.find(b => b > top + 1 && b < end);
+    sliceH = Math.round(Math.min(cut ? cut.top : end, forced ?? end) - top);
     const slice = document.createElement('canvas');
     slice.width = canvas.width;
     slice.height = sliceH;
@@ -87,9 +100,9 @@ export async function exportPlanPdf(element: HTMLElement, filename: string, shar
     pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', PAGE_MARGIN_MM, PAGE_MARGIN_MM, pageW, lastSliceMm);
   }
 
-  if (shareUrl) {
+  if (share) {
     const { toDataURL } = await import('qrcode');
-    const qr = await toDataURL(shareUrl, { margin: 1, width: 300 });
+    const qr = await toDataURL(share.qrUrl, { margin: 1, width: 300 });
     // Bottom of the last page, on a new page if the plan leaves no room
     if (lastSliceMm + FOOTER_GAP_MM + QR_SIZE_MM > pageH) pdf.addPage();
     const y = PAGE_MARGIN_MM + pageH - QR_SIZE_MM;
@@ -97,10 +110,15 @@ export async function exportPlanPdf(element: HTMLElement, filename: string, shar
     pdf.addImage(qr, 'PNG', PAGE_MARGIN_MM, y, QR_SIZE_MM, QR_SIZE_MM);
     pdf.setFontSize(11);
     pdf.setTextColor('#374151');
-    pdf.text('View this plan in 3D:', textX, y + 10);
-    pdf.setFontSize(10);
-    pdf.setTextColor('#1d4ed8');
-    pdf.textWithLink(shareUrl, textX, y + 16, { url: shareUrl });
+    pdf.text('View this plan in 3D:', textX, y + 5);
+    pdf.setFontSize(9);
+    share.links.forEach(({ label, url }, i) => {
+      const lineY = y + 11 + i * 5.5;
+      pdf.setTextColor('#374151');
+      pdf.text(`${label}:`, textX, lineY);
+      pdf.setTextColor('#1d4ed8');
+      pdf.textWithLink(url, textX + 18, lineY, { url });
+    });
   }
 
   pdf.save(filename);

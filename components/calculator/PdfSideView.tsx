@@ -1,6 +1,6 @@
 'use client';
 
-import { CONTAINERS, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
+import { CONTAINERS, packPallets, PlacedPallet, sideLanes } from '@/lib/engine/floorPlan';
 import { familyColorMap } from '@/lib/familyColors';
 import { PalletPlan, ShipmentResult } from '@/lib/types';
 
@@ -32,17 +32,13 @@ export default function PdfSideView({ pallets, recommendation, placed: savedPlac
   const placed = savedPlaced ?? packPallets(pallets, container.LENGTH);
   if (placed.length === 0) return null;
 
-  // Pallets sharing a strip (same x) sit in rows across the width
-  const strips = new Map<number, PlacedPallet[]>();
-  for (const p of placed) {
-    strips.set(p.x, [...(strips.get(p.x) ?? []), p]);
-  }
+  // Pallets whose lengths overlap sit in rows across the width (for the auto
+  // layout, the pallets sharing a strip); this also holds for a hand-moved layout
   const rows: PlacedPallet[][] = [];
-  strips.forEach(strip => {
-    [...strip].sort((a, b) => a.y - b.y).forEach((p, row) => {
-      (rows[row] ??= []).push(p);
-    });
+  sideLanes(placed).forEach((row, p) => {
+    (rows[row] ??= []).push(p);
   });
+  rows.forEach(row => row.sort((a, b) => a.x - b.x));
 
   const cL = px(container.LENGTH);
   const cH = px(container.HEIGHT);
@@ -73,7 +69,8 @@ export default function PdfSideView({ pallets, recommendation, placed: savedPlac
                   return stack.map(({ pallet, baseMm, isTop }) => {
                     // Overflow pallets show as a sliver at the container end, as on the floor plan
                     const x = px(Math.min(p.x, container.LENGTH - 10));
-                    const w = p.overflow ? Math.max(4, cL - x) : px(pallet.lengthMm);
+                    // A pallet turned 90° shows its width along the container
+                    const w = p.overflow ? Math.max(4, cL - x) : px(p.rotated ? pallet.widthMm : pallet.lengthMm);
                     const h = px(pallet.heightMm);
                     const y = 1 + cH - px(baseMm) - h;
                     const color = p.overflow ? OVERFLOW_COLOR : (familyColors[pallet.family] ?? '#94a3b8');

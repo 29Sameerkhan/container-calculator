@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { computeShipment } from '@/lib/engine/palletEngine';
-import { OrderItem } from '@/lib/types';
+import { OrderItem, ShipmentOrder } from '@/lib/types';
+import { engineItems } from '@/lib/orders';
+import { PRESET_CONFIGS, DEFAULT_PRESET } from '@/lib/constants';
 import { z } from 'zod';
 
 const OrderItemSchema = z.object({
@@ -29,6 +31,8 @@ const RequestSchema = z.object({
   items: z.array(OrderItemSchema).min(1).optional(),
   customerName: z.string().optional(),
   orderRef: z.string().optional(),
+  // Rule preset to pack with; Standard when not given
+  preset: z.enum(['standard', 'relaxed', 'freepack']).optional(),
 }).refine(body => body.orders !== undefined || body.items !== undefined, {
   message: 'Provide either orders or items',
 });
@@ -48,11 +52,10 @@ export async function POST(req: NextRequest) {
     // Each order's lines are tagged with its customer so the engine never
     // puts two customers' boxes on one pallet
     const { orders, items } = parsed.data;
-    const allItems = orders
-      ? orders.flatMap(o => o.items.map(item => ({ ...item, customer: item.customer || o.customerName || o.orderRef })))
-      : items!;
+    const allItems = orders ? engineItems(orders as ShipmentOrder[]) : items!;
 
-    const result = computeShipment(allItems as OrderItem[]);
+    const preset = parsed.data.preset ?? DEFAULT_PRESET;
+    const result = computeShipment(allItems as OrderItem[], PRESET_CONFIGS[preset], preset);
 
     return NextResponse.json({
       success: true,

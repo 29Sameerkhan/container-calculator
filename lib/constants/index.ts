@@ -1,27 +1,41 @@
+import type { PresetConfig, RulePreset } from '@/lib/types';
+
 // Container specs
 export const CONTAINERS = {
   FCL_20FT: { maxCBM: 33.2, maxPayloadKg: 23000, tareKg: 2200 },
   FCL_40FT: { maxCBM: 67.6, maxPayloadKg: 28000, tareKg: 3900 },
 };
 
-// Pump pallet width lookup by family
-export const PUMP_PALLET_WIDTH: Record<string, number> = {
-  'SK77': 920, 'SK95': 920,
-  'SK30': 770, 'SK46': 770,
-  'SK12': 720, 'SK13': 720, 'SK14': 720,
-  'SK17': 720, 'SK60': 720, 'SK60B': 720,
-  'SK09-large': 770,
-  'SK09-medium': 615, 'SK02': 615, 'SK03': 615,
-  'SK05': 515, 'SK09-small': 515,
-};
+// Pump pallet families the calculator knows (pick list and code recognition)
+export const PUMP_PALLET_FAMILIES: string[] = [
+  'SK77', 'SK95',
+  'SK30', 'SK46',
+  'SK12', 'SK13', 'SK14',
+  'SK17', 'SK60', 'SK60B',
+  'SK09-large',
+  'SK09-medium', 'SK02', 'SK03',
+  'SK05', 'SK09-small',
+];
 
-// Motor pallet width by series
-// V4 = 6" CI motors (narrower pallet): 770mm — verified from SK-02 packing list pallet W=770
-// V6 = 8" CI motors (wider pallet):   890mm — 5 motor boxes of 178mm across (was 1020 from SK-03 packing list)
-export const MOTOR_PALLET_WIDTH: Record<string, number> = {
-  'V4': 770,
-  'V6': 890,
-};
+// Pump pallet width (mm), one size for every family.
+// Standardised per Kiran sir, 19 Nov 2026
+export const PUMP_PALLET_WIDTH_MM = 1030;
+
+// Motor pallet width (mm), one size for every motor series.
+// Standardised per Kiran sir, 19 Nov 2026
+export const MOTOR_PALLET_WIDTH_MM = 750;
+
+// Motors packed side-by-side across a motor pallet: always 3, not derived from box width.
+// Standardised per Kiran sir, 19 Nov 2026
+export const MOTORS_PER_ROW = 3;
+
+// Wooden crates for loose motor boxes (Freepack V4 motors): one variant per
+// crate, up to this many boxes and this gross weight. Factory crate for 40 ×
+// SM-S-I-5.5-V4: 800mm H × 780mm × 1,180mm.
+export const CRATE_MAX_QTY = 40;
+export const CRATE_MAX_GROSS_KG = 1500;
+// Crate wall/base/lid allowance per side (mm) around the stacked boxes
+export const CRATE_WALL_MM = 45;
 
 // Wood weight constants (kg)
 export const WOOD_WEIGHT = {
@@ -30,10 +44,16 @@ export const WOOD_WEIGHT = {
   PUMP_LIGHT: 25,
   PUMP_HEAVY: 30,  // SK77/SK95 family
   BOX_ACCESSORY: 10,
+  CRATE: 25,       // assumed — confirm with the factory
 };
 
-// Max stacking height inside container (mm)
-export const MAX_STACK_HEIGHT_MM = 2200;
+// Max pump pallet height (mm), total from floor: wood base + boxes (870mm of boxes).
+// Standardised per Kiran sir, 19 Nov 2026
+export const MAX_PUMP_TOTAL_HEIGHT_MM = 1050;
+
+// Max motor pallet height (mm), total from floor: wood base + boxes (900mm of boxes).
+// Standardised per Kiran sir, 19 Nov 2026
+export const MAX_MOTOR_TOTAL_HEIGHT_MM = 1080;
 
 // Wooden pallet base height (mm), added on top of stacked box height
 export const PALLET_BASE_HEIGHT_MM = 180;
@@ -55,3 +75,73 @@ export const MAX_PUMP_PALLET_LENGTH_MM = 3700;
 // Below this total gross weight (kg) LCL is suggested instead of a full container:
 // a load that fits a 20ft is recommended as LCL, a 40ft load gets a note
 export const LCL_SUGGEST_BELOW_KG = 10000;
+
+// ─── Rule presets ────────────────────────────────────────────────────────────
+// Pallet-level limits only. The container payload caps in CONTAINERS
+// (20ft: 23,000 kg, 40ft: 28,000 kg) apply under every preset and are never relaxed.
+export const PRESET_CONFIGS: Record<RulePreset, PresetConfig> = {
+  // The standardised rules above (Kiran sir, 19 Nov 2026)
+  standard: {
+    pumpPalletWidthMm: PUMP_PALLET_WIDTH_MM,
+    motorPalletWidthMm: MOTOR_PALLET_WIDTH_MM,
+    maxPumpTotalHeightMm: MAX_PUMP_TOTAL_HEIGHT_MM,
+    maxMotorTotalHeightMm: MAX_MOTOR_TOTAL_HEIGHT_MM,
+    maxPalletGrossKg: MAX_PALLET_GROSS_KG,
+    maxPalletLengthMm: Infinity,   // current behaviour, no cap
+    allowCrossFamily: false,
+    motorsPerRow: MOTORS_PER_ROW,
+    motorQtyPerPallet: Infinity,   // limited by height and weight only
+    v4MotorsInCrates: false,
+    rotatePalletsOnFloor: false,   // rows across the floor in length order, as before
+  },
+  relaxed: {
+    pumpPalletWidthMm: 1030,
+    motorPalletWidthMm: 750,
+    maxPumpTotalHeightMm: 1500,
+    maxMotorTotalHeightMm: 1500,
+    maxPalletGrossKg: 2000,
+    maxPalletLengthMm: Infinity,   // relaxed changes height and weight only
+    allowCrossFamily: false,
+    motorsPerRow: MOTORS_PER_ROW,
+    motorQtyPerPallet: Infinity,
+    v4MotorsInCrates: false,
+    rotatePalletsOnFloor: false,
+  },
+  // Factory-style packing, benchmarked on the factory's packing list for the
+  // Societe des Sources Vertes order (SK/SO/2026-2027/00143)
+  freepack: {
+    pumpPalletWidthMm: 1110,
+    motorPalletWidthMm: 725,       // factory uses 725mm for V6 motors
+    maxPumpTotalHeightMm: 1770,    // factory maximum observed
+    maxMotorTotalHeightMm: 1650,   // factory maximum observed (SK-09)
+    maxPalletGrossKg: 2000,        // factory maximum observed (SK-02 at 1,980kg)
+    // Factory practice: the longest pump pallet is ~1,640mm; 160mm margin
+    maxPalletLengthMm: 1800,
+    allowCrossFamily: true,        // pump families mix freely, rows shared
+    motorsPerRow: 3,               // factory kept 3 across for V6 motors
+    motorQtyPerPallet: 24,         // factory target: 3 across × 8 rows
+    v4MotorsInCrates: true,        // factory packed V4 solar motors in wooden crates
+    rotatePalletsOnFloor: true,    // pallets may be turned 90° on the floor for a tighter load
+  },
+};
+
+export const DEFAULT_PRESET: RulePreset = 'standard';
+
+export const RULE_PRESETS: RulePreset[] = ['standard', 'relaxed', 'freepack'];
+
+export const PRESET_LABELS: Record<RulePreset, string> = {
+  standard: 'Standard',
+  relaxed: 'Relaxed',
+  freepack: 'Freepack',
+};
+
+// One line on what each preset changes compared with Standard
+export const PRESET_SUMMARIES: Record<RulePreset, string> = {
+  standard: 'Pump 1,030mm · Motor 750mm wide · Height 1,050 / 1,080mm · Max pallet weight 1,500kg',
+  relaxed: 'Height cap raised to 1,500mm · Max pallet weight 2,000kg',
+  freepack: 'Factory-style · pumps 1,110mm wide, 1,770mm high, mixed families · V6 motors 725mm wide, 24 per pallet · V4 motors in crates',
+};
+
+export function isRulePreset(value: unknown): value is RulePreset {
+  return typeof value === 'string' && (RULE_PRESETS as string[]).includes(value);
+}

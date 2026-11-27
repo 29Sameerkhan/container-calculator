@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { OrderItem } from '@/lib/types';
-import { PUMP_PALLET_WIDTH } from '@/lib/constants';
+import { PUMP_PALLET_FAMILIES } from '@/lib/constants';
 import { calcPumpBox, hasStageWeight, isValidStages, pumpColumnFromCode, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
 import { calcMotorBox, parseMotorCode } from '@/lib/engine/motorData';
 import { normaliseProductCode } from '@/lib/engine/utils';
@@ -36,7 +36,7 @@ function getFamilyOptions(productType: OrderItem['productType']): string[] {
   if (productType === 'motor-V8') return ['SM-V8'];
   if (productType === 'controller') return ['controller'];
   if (productType === 'spare') return ['spare'];
-  return Object.keys(PUMP_PALLET_WIDTH);
+  return PUMP_PALLET_FAMILIES;
 }
 
 const NUMBER_FIELDS: { field: 'quantity' | 'boxLengthMm' | 'boxWidthMm' | 'boxHeightMm' | 'netWeightKg' | 'grossWeightKg'; label: string; className?: string }[] = [
@@ -63,7 +63,7 @@ const INPUT =
 const emptyRow = (): Omit<OrderItem, 'palletFamily'> & { palletFamily: string } => ({
   productCode: '',
   productType: 'pump',
-  palletFamily: Object.keys(PUMP_PALLET_WIDTH)[0],
+  palletFamily: PUMP_PALLET_FAMILIES[0],
   quantity: 1,
   boxLengthMm: 0,
   boxWidthMm: 0,
@@ -137,7 +137,7 @@ function pumpCodeParts(code: string): { series: string; stagesPart: string } | n
   if (!m) return null;
   const raw = `SK${m[1]}`;
   const series = PUMP_SERIES_ALIAS[raw] ?? raw;
-  const known = series === 'SK09' || series in PUMP_PALLET_WIDTH;
+  const known = series === 'SK09' || PUMP_PALLET_FAMILIES.includes(series);
   return known ? { series, stagesPart: m[2] ?? '' } : null;
 }
 

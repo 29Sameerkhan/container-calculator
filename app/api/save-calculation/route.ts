@@ -16,6 +16,8 @@ const SaveSchema = z.object({
     totalGrossKg: z.number(),
     containerRecommendation: z.string(),
     warnings: z.array(z.string()),
+    preset: z.enum(['standard', 'relaxed', 'freepack']).optional(), // rules the plan was packed with
+    manualLayout: z.boolean().optional(), // placed holds hand-moved floor positions
   }).passthrough(), // keep perCustomer and any other result fields in result_json
 });
 
