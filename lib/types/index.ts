@@ -117,10 +117,13 @@ export interface PresetConfig {
 }
 
 // A pallet's floor position set by hand in the floor plan editor: mm from the
-// container's front-left corner (x along the length, y across the width)
+// container's front-left corner (x along the length, y across the width).
+// stackedOn: the pallet was stacked by hand on top of that floor pallet (its
+// x/y are then ignored; it stands wherever that pallet stands).
 export interface FloorPosition {
   x: number;
   y: number;
+  stackedOn?: string;
 }
 
 export type PalletPositions = Record<string, FloorPosition>;

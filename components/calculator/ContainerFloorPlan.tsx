@@ -4,7 +4,7 @@ import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } fro
 import { PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
 import {
   applyPositions, CONTAINER_INNER_WIDTH_MM, CONTAINERS, floorLayout, footprintLabel, footprintLength, footprintWidth,
-  LayoutIssue, PlacedPallet, sideLanes, validateLayout,
+  LayoutIssue, overlaps, PlacedPallet, sideLanes, stackRefusal, validateLayout,
 } from '@/lib/engine/floorPlan';
 import { familyColorMap } from '@/lib/familyColors';
 
@@ -82,6 +82,7 @@ interface Drag {
 interface Toast {
   id: number;
   message: string;
+  tone: 'error' | 'info';
 }
 
 export default function ContainerFloorPlan({
@@ -140,20 +141,48 @@ export default function ContainerFloorPlan({
   const stackedCount = shown.filter(p => p.stackedPallet).length;
 
   // ── Toasts ────────────────────────────────────────────────────────────────
-  function showToasts(messages: string[]) {
+  function showToasts(messages: string[], tone: Toast['tone'] = 'error') {
     if (messages.length === 0) return;
-    const added = messages.map(message => ({ id: ++toastId.current, message }));
+    const added = messages.map(message => ({ id: ++toastId.current, message, tone }));
     setToasts(prev => [...prev, ...added]);
     toastTimers.current.push(setTimeout(() => {
       setToasts(prev => prev.filter(t => !added.some(a => a.id === t.id)));
     }, TOAST_MS));
   }
 
-  // Saves a footprint's new position and toasts any error it now takes part in
-  function commitMove(id: string, x: number, y: number) {
+  // Saves a footprint's new position and toasts any error it now takes part in.
+  // Dragged so its centre lands on exactly one other single pallet (not just
+  // clipping an edge, and never by an arrow-key nudge), it's a stacking intent: if the
+  // stacking rules allow it, the heavier pallet becomes the bottom and the pair
+  // stands where the other pallet stood. Otherwise the overlap error stands, with
+  // the reason the stack isn't allowed.
+  function commitMove(id: string, x: number, y: number, mayStack = false) {
     if (!onPositionsChange || !layout) return;
     const next = { ...positions, [id]: { x, y } };
     const after = applyPositions(layout.placed, next, layout.containerLength);
+    const moved = after.find(p => p.pallet.palletId === id);
+    const hits = moved ? after.filter(o => o !== moved && overlaps(moved, o)) : [];
+    const centreOn = (o: PlacedPallet) => {
+      if (!moved) return false;
+      const cx = moved.x + footprintLength(moved) / 2;
+      const cy = moved.y + footprintWidth(moved) / 2;
+      return cx > o.x && cx < o.x + footprintLength(o) && cy > o.y && cy < o.y + footprintWidth(o);
+    };
+    if (mayStack && moved && hits.length === 1 && centreOn(hits[0]) && !stackRefusal(moved, hits[0])) {
+      const target = hits[0];
+      const before = placed.find(p => p.pallet.palletId === id);
+      const [bottom, top] = moved.pallet.totalGrossKg >= target.pallet.totalGrossKg ? [moved, target] : [target, moved];
+      // The top keeps a position to return to if it's unstacked: where the
+      // dragged pallet came from, or where the pallet it was dropped on stood
+      const topHome = top === moved && before ? { x: before.x, y: before.y } : { x: target.x, y: target.y };
+      onPositionsChange({
+        ...positions,
+        [bottom.pallet.palletId]: { x: target.x, y: target.y },
+        [top.pallet.palletId]: { ...topHome, stackedOn: bottom.pallet.palletId },
+      });
+      showToasts([`${top.pallet.palletId} stacked on ${bottom.pallet.palletId}.`], 'info');
+      return;
+    }
     const errors = validateLayout(after, layout.containerLength, maxPalletGrossKg ?? Infinity)
       .filter(i => i.severity === 'error' && i.palletIds.includes(id));
     onPositionsChange(next);
@@ -183,6 +212,14 @@ export default function ContainerFloorPlan({
       x: clamp(snap(rawX, xs), 0, Math.max(0, containerLength - len)),
       y: clamp(snap(rawY, ys), 0, Math.max(0, C_WIDTH_MM - wid)),
     };
+  }
+
+  // Undoes a stack made by hand: the top pallet goes back to its own position
+  // (it may overlap something there; the layout checks will say so)
+  function unstack(topId: string) {
+    const pos = positions?.[topId];
+    if (!onPositionsChange || !pos?.stackedOn) return;
+    onPositionsChange({ ...positions, [topId]: { x: pos.x, y: pos.y } });
   }
 
   function handlePointerDown(e: PointerEvent<SVGGElement>, p: PlacedPallet) {
@@ -219,7 +256,7 @@ export default function ContainerFloorPlan({
     svgRef.current?.releasePointerCapture(e.pointerId);
     const p = placed.find(q => q.pallet.palletId === drag.id);
     if (drag.moved && p && (drag.x !== p.x || drag.y !== p.y)) {
-      commitMove(drag.id, drag.x, drag.y);
+      commitMove(drag.id, drag.x, drag.y, true);
     } else if (!drag.moved) {
       setSelected(selected === drag.id ? null : drag.id);
     }
@@ -301,9 +338,18 @@ export default function ContainerFloorPlan({
     });
 
   const selectedPallet = selected ? pallets.find(p => p.palletId === selected) : null;
-  const selectedPartner = selectedPallet?.stackedWith
-    ? pallets.find(p => p.palletId === selectedPallet.stackedWith)
+  // The selected pallet's stack, as the floor stands now
+  const selectedUnit = selected
+    ? placed.find(u => u.pallet.palletId === selected || u.stackedPallet?.palletId === selected)
     : undefined;
+  const selectedIsTop = selectedUnit?.stackedPallet?.palletId === selected;
+  const selectedPartner = selectedUnit?.stackedPallet
+    ? (selectedIsTop ? selectedUnit.pallet : selectedUnit.stackedPallet)
+    : undefined;
+  // A stack made by hand can be undone; one the engine made can't (Reset restores it)
+  const handStackTop = selectedUnit?.stackedPallet && positions?.[selectedUnit.stackedPallet.palletId]?.stackedOn
+    ? selectedUnit.stackedPallet.palletId
+    : null;
   // Only what this container holds: a split shipment draws its first container
   const totalCBM = placed.reduce((s, p) => s + p.pallet.cbm + (p.stackedPallet?.cbm ?? 0), 0);
   const maxCBM = container.LENGTH * C_WIDTH_MM * container.HEIGHT / 1e9;
@@ -372,7 +418,7 @@ export default function ContainerFloorPlan({
             <p className="text-sm font-semibold text-blue-900">Drag pallets to reposition · Errors shown below</p>
             <p className="text-xs text-blue-700 mt-0.5">
               {view === 'top'
-                ? 'Click a pallet to select it; arrow keys nudge it 10 mm (Shift: 100 mm).'
+                ? 'Drop a pallet onto another to stack it (if the stacking limits allow). Click to select; arrow keys nudge 10 mm (Shift: 100 mm).'
                 : 'Switch to the Top view to move pallets.'}
             </p>
           </div>
@@ -486,14 +532,14 @@ export default function ContainerFloorPlan({
                       {weightLabel}
                     </text>
                   )}
-                  {stackedPallet && wPx > 40 && hPx > 16 && (
+                  {stackedPallet && wPx > 56 && hPx > 16 && (
                     <text
                       x={x + len - pxToMm(8)} y={y + pxToMm(10)}
                       textAnchor="end" dominantBaseline="middle"
                       fontSize={pxToMm(8)} fill="white" fontWeight="700"
                       style={{ pointerEvents: 'none' }}
                     >
-                      ⬆2
+                      ↑ stacked
                     </text>
                   )}
                 </g>
@@ -560,11 +606,23 @@ export default function ContainerFloorPlan({
             <span>{selectedPallet.cbm} CBM</span>
             <span>{selectedPallet.totalGrossKg} kg gross</span>
           </div>
-          {selectedPallet.isStacked && selectedPartner && (
-            <div className="text-blue-700">
-              ⧉ Stacked {selectedPallet.stackPosition === 'top' ? 'on top of' : 'under'} {selectedPartner.palletId}
-              {' · '}combined H {selectedPallet.heightMm + selectedPartner.heightMm} mm
-              {' · '}{selectedPallet.totalGrossKg + selectedPartner.totalGrossKg} kg gross
+          {selectedPartner && (
+            <div className="text-blue-700 flex items-center gap-3 flex-wrap">
+              <span>
+                ⧉ Stacked {selectedIsTop ? 'on top of' : 'under'} {selectedPartner.palletId}
+                {handStackTop && ' (by hand)'}
+                {' · '}combined H {selectedPallet.heightMm + selectedPartner.heightMm} mm
+                {' · '}{selectedPallet.totalGrossKg + selectedPartner.totalGrossKg} kg gross
+              </span>
+              {editable && handStackTop && (
+                <button
+                  data-pdf-hide
+                  onClick={() => unstack(handStackTop)}
+                  className="font-semibold text-blue-700 border border-blue-300 hover:bg-blue-100 rounded px-2 py-0.5"
+                >
+                  Unstack
+                </button>
+              )}
             </div>
           )}
           {selectedPallet.isMixedSku && selectedPallet.skuBreakdown && (
@@ -601,14 +659,16 @@ export default function ContainerFloorPlan({
           {toasts.map(t => (
             <div
               key={t.id}
-              className="flex items-start gap-3 rounded-lg border border-red-200 bg-white shadow-lg px-4 py-3 text-sm text-red-700"
+              className={`flex items-start gap-3 rounded-lg border bg-white shadow-lg px-4 py-3 text-sm ${
+                t.tone === 'error' ? 'border-red-200 text-red-700' : 'border-green-200 text-green-800'
+              }`}
             >
-              <span aria-hidden>⚠</span>
+              <span aria-hidden>{t.tone === 'error' ? '⚠' : '↑'}</span>
               <span className="flex-1">{t.message}</span>
               <button
                 onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
                 aria-label="Dismiss"
-                className="text-red-400 hover:text-red-700"
+                className={t.tone === 'error' ? 'text-red-400 hover:text-red-700' : 'text-green-500 hover:text-green-800'}
               >
                 ×
               </button>

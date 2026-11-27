@@ -1,4 +1,5 @@
 import { PalletPlan, PalletPositions, PlacedPallet } from '@/lib/types';
+import { stackingProblem } from '@/lib/engine/stacking';
 
 export type { PlacedPallet };
 
@@ -268,9 +269,21 @@ export function applyPositions(
   containerLength: number,
 ): PlacedPallet[] {
   if (!positions || Object.keys(positions).length === 0) return placed;
-  return placed.map(p => {
+  // Stacks made by hand first: the top pallet's footprint joins its bottom's.
+  // An entry that no longer matches two single pallets is ignored.
+  let units = placed;
+  for (const [topId, pos] of Object.entries(positions)) {
+    if (!pos.stackedOn) continue;
+    const top = units.find(u => u.pallet.palletId === topId && !u.stackedPallet);
+    const bottom = units.find(u => u.pallet.palletId === pos.stackedOn && !u.stackedPallet);
+    if (!top || !bottom || top === bottom) continue;
+    units = units
+      .filter(u => u !== top)
+      .map(u => (u === bottom ? { ...u, stackedPallet: top.pallet } : u));
+  }
+  return units.map(p => {
     const pos = positions[p.pallet.palletId];
-    if (!pos) return p;
+    if (!pos || pos.stackedOn) return p;
     const moved = { ...p, x: pos.x, y: pos.y };
     return { ...moved, overflow: outsideByMm(moved, containerLength) > 0 };
   });
@@ -288,7 +301,7 @@ export function outsideByMm(p: PlacedPallet, containerLength: number): number {
   );
 }
 
-function overlaps(a: PlacedPallet, b: PlacedPallet): boolean {
+export function overlaps(a: PlacedPallet, b: PlacedPallet): boolean {
   return (
     a.x + footprintLength(a) - TOUCH_TOLERANCE_MM > b.x &&
     b.x + footprintLength(b) - TOUCH_TOLERANCE_MM > a.x &&
@@ -305,6 +318,16 @@ export interface LayoutIssue {
   severity: 'error' | 'warning';
   palletIds: string[];   // footprint floor-pallet ids to outline in red
   message: string;
+}
+
+// Why two overlapping footprints can't simply be stacked: a footprint that is
+// already a pair can't take a third pallet; otherwise the stacking rules, with
+// the heavier pallet as the bottom. Null when they could be stacked.
+export function stackRefusal(a: PlacedPallet, b: PlacedPallet): string | null {
+  const pair = [a, b].find(p => p.stackedPallet);
+  if (pair) return `${footprintLabel(pair)} is already a stacked pair (no triple stacking)`;
+  const [bottom, top] = a.pallet.totalGrossKg >= b.pallet.totalGrossKg ? [a.pallet, b.pallet] : [b.pallet, a.pallet];
+  return stackingProblem(bottom, top);
 }
 
 // Footprint label: "SK-03", or "SK-03 + SK-07" for a stacked pair
@@ -325,11 +348,15 @@ export function validateLayout(
       const a = placed[i];
       const b = placed[j];
       if (!overlaps(a, b)) continue;
+      const why = stackRefusal(a, b);
       issues.push({
         kind: 'overlap',
         severity: 'error',
         palletIds: [a.pallet.palletId, b.pallet.palletId],
-        message: `[${footprintLabel(a)}] overlaps [${footprintLabel(b)}]. Pallets cannot occupy the same floor space.`,
+        message: `[${footprintLabel(a)}] overlaps [${footprintLabel(b)}]. Pallets cannot occupy the same floor space.` +
+          (why
+            ? ` Can't stack: ${why}.`
+            : ` They can be stacked: drag one fully onto the other.`),
       });
     }
   }
@@ -359,4 +386,27 @@ export function validateLayout(
     }
   }
   return issues;
+}
+
+// The pallets with their stack fields (isStacked, stackedWith, stackPosition)
+// matching the floor as laid out, so hand-made stacks show in the pallet table
+// and are saved. Pallets not on this floor (other containers) are unchanged.
+export function withStackFields(pallets: PalletPlan[], placed: PlacedPallet[]): PalletPlan[] {
+  const onFloor = new Map<string, { stackedWith?: string; stackPosition?: 'bottom' | 'top' }>();
+  for (const p of placed) {
+    const top = p.stackedPallet;
+    onFloor.set(p.pallet.palletId, top ? { stackedWith: top.palletId, stackPosition: 'bottom' } : {});
+    if (top) onFloor.set(top.palletId, { stackedWith: p.pallet.palletId, stackPosition: 'top' });
+  }
+  return pallets.map(pallet => {
+    const stack = onFloor.get(pallet.palletId);
+    if (!stack) return pallet;
+    const rest: PalletPlan = { ...pallet };
+    delete rest.isStacked;
+    delete rest.stackedWith;
+    delete rest.stackPosition;
+    return stack.stackPosition
+      ? { ...rest, isStacked: true, stackedWith: stack.stackedWith, stackPosition: stack.stackPosition }
+      : rest;
+  });
 }

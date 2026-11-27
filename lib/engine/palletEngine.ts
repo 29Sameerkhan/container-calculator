@@ -13,8 +13,6 @@ import {
   MOTORS_PER_ROW,
   WOOD_WEIGHT,
   PALLET_BASE_HEIGHT_MM,
-  MAX_STACKABLE_PALLET_KG,
-  MAX_STACKED_PAIR_KG,
   MAX_PUMP_PALLET_LENGTH_MM,
   LCL_SUGGEST_BELOW_KG,
   CRATE_MAX_QTY,
@@ -24,6 +22,7 @@ import {
   DEFAULT_PRESET,
 } from '@/lib/constants';
 import { packPallets, packPalletsTurning } from '@/lib/engine/floorPlan';
+import { stackingProblem } from '@/lib/engine/stacking';
 import { normaliseProductCode } from '@/lib/engine/utils';
 
 // Container inner dimensions (mm)
@@ -31,8 +30,6 @@ export const CONTAINER_INNER_20FT = { lengthMm: 5898, widthMm: 2352, heightMm: 2
 export const CONTAINER_INNER_40FT = { lengthMm: 12032, widthMm: 2352, heightMm: 2393 };
 export const CONTAINER_INNER_40HC = { lengthMm: 12032, widthMm: 2352, heightMm: 2698 };
 
-// Stacked pair height cap, pending the loading team's forklift clearance check
-const MAX_STACKED_HEIGHT_MM = 2200;
 
 // Pumps from different pools share a pallet only if their pool widths are this close
 const MAX_CROSS_POOL_WIDTH_GAP_MM = 100;
@@ -715,19 +712,9 @@ export function buildPalletPlans(items: OrderItem[], cfg: PresetConfig = STANDAR
 
 // ─── Stacking ────────────────────────────────────────────────────────────────
 // A pallet may go on top of another only if all of these hold
+// The rules live in stacking.ts, shared with the floor plan editor
 function canStack(bottom: PalletPlan, top: PalletPlan): boolean {
-  return (
-    top.lengthMm <= bottom.lengthMm &&                                 // fits within the
-    top.widthMm <= bottom.widthMm &&                                   //   bottom footprint
-    // Whole-pallet stacking: heavier on floor (forklift stability).
-    // Longest-at-bottom applies only to box layers within a pallet.
-    bottom.totalGrossKg >= top.totalGrossKg &&
-    bottom.heightMm + top.heightMm <= MAX_STACKED_HEIGHT_MM &&         // forklift clearance
-    bottom.totalGrossKg <= MAX_STACKABLE_PALLET_KG &&                  // each pallet within the
-    top.totalGrossKg <= MAX_STACKABLE_PALLET_KG &&                     //   stacking limit
-    bottom.totalGrossKg + top.totalGrossKg <= MAX_STACKED_PAIR_KG &&   // forklift capacity for the pair
-    (bottom.customer ?? '') === (top.customer ?? '')                   // consignees kept apart
-  );
+  return stackingProblem(bottom, top) === null;
 }
 
 // Pairs pallets two-high. Heaviest pallets are tried as bottoms first; each

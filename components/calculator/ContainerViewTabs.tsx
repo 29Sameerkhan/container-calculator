@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import Container3DView from '@/components/calculator/Container3DView';
 import PdfSideView from '@/components/calculator/PdfSideView';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
+import { applyPositions, floorLayout, withStackFields } from '@/lib/engine/floorPlan';
 import { PalletPlan, PalletPositions, PlacedPallet, ShipmentResult } from '@/lib/types';
 
 type Tab = 'plan' | '3d';
@@ -89,6 +90,11 @@ function EditorLayout({ pallets, recommendation, placed, positions, onPositionsC
   const [tab, setTab] = useState<EditorTab>('plan');
   // The 3D scene isn't created until its tab is first opened
   const [opened3d, setOpened3d] = useState(false);
+  // The table lists stacks as the floor stands now, hand-made ones included
+  const tablePallets = useMemo(() => {
+    const layout = floorLayout(pallets, recommendation, placed);
+    return layout ? withStackFields(pallets, applyPositions(layout.placed, positions, layout.containerLength)) : pallets;
+  }, [pallets, recommendation, placed, positions]);
 
   return (
     <div>
@@ -137,7 +143,7 @@ function EditorLayout({ pallets, recommendation, placed, positions, onPositionsC
       )}
 
       <div id="result-panel-table" role="tabpanel" aria-labelledby="result-tab-table" className={tab === 'table' ? undefined : 'hidden'}>
-        <PalletPlanTable pallets={pallets} />
+        <PalletPlanTable pallets={tablePallets} />
       </div>
     </div>
   );
