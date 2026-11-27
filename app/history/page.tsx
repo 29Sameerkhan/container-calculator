@@ -44,6 +44,8 @@ export default function HistoryPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Filters the loaded rows on screen; rows stays the full list
+  const [search, setSearch] = useState('');
 
   function closeDeleteModal() {
     if (deleting) return;
@@ -88,10 +90,19 @@ export default function HistoryPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const totalCbm = rows.reduce((s, r) => s + r.totalCbm, 0);
-  const totalGrossKg = rows.reduce((s, r) => s + r.totalGrossKg, 0);
+  // Case-insensitive match on customer, order ref and container (code or label)
+  const query = search.trim().toLowerCase();
+  const filtered = query
+    ? rows.filter(r =>
+        [r.customerName, r.orderRef, r.containerRecommendation, CONTAINER_LABEL[r.containerRecommendation] ?? '']
+          .some(field => field.toLowerCase().includes(query)))
+    : rows;
+
+  // The stat cards follow the search
+  const totalCbm = filtered.reduce((s, r) => s + r.totalCbm, 0);
+  const totalGrossKg = filtered.reduce((s, r) => s + r.totalGrossKg, 0);
   const stats = [
-    { icon: '🚢', label: 'Total Shipments', value: rows.length.toLocaleString() },
+    { icon: '🚢', label: 'Total Shipments', value: filtered.length.toLocaleString() },
     { icon: '📦', label: 'Total CBM Planned', value: `${totalCbm.toFixed(2)} m³` },
     { icon: '⚖️', label: 'Total Gross Weight', value: `${Math.round(totalGrossKg).toLocaleString()} kg` },
   ];
@@ -139,6 +150,39 @@ export default function HistoryPage() {
           </div>
         )}
 
+        {/* Search: only once there is something to search */}
+        {!loading && !error && rows.length > 0 && (
+          <div className="relative">
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setSearch(''); }}
+              placeholder="Search by customer, order ref, or container…"
+              aria-label="Search calculations by customer, order ref, or container"
+              className="w-full rounded-xl border border-blue-100 bg-white pl-4 pr-10 py-2.5 text-sm text-gray-800 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-lg leading-none text-gray-400 hover:text-gray-600"
+                aria-label="Clear search"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+
+        {!loading && !error && rows.length > 0 && filtered.length === 0 && (
+          <div className="text-center py-16">
+            <p className="text-gray-500 text-sm">No results for &lsquo;{search.trim()}&rsquo;</p>
+            <button onClick={() => setSearch('')} className="mt-3 text-sm text-blue-600 hover:underline">
+              Clear search
+            </button>
+          </div>
+        )}
+
         {!loading && !error && rows.length === 0 && (
           <div className="text-center py-16">
             <p className="text-gray-400 text-sm">No saved calculations yet.</p>
@@ -148,7 +192,7 @@ export default function HistoryPage() {
           </div>
         )}
 
-        {!loading && rows.length > 0 && (
+        {!loading && filtered.length > 0 && (
           <div className="bg-white rounded-2xl border border-blue-100 shadow-sm overflow-hidden">
             {/* Scrolls inside a box at most 70% of the screen tall, so its sideways
                 scrollbar is always on screen (not below the last row). The header
@@ -174,7 +218,7 @@ export default function HistoryPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {rows.map(row => (
+                  {filtered.map(row => (
                     <tr
                       key={row.id}
                       onClick={() => router.push('/history/' + row.id)}
