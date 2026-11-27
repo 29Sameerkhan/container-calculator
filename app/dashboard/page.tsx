@@ -16,7 +16,7 @@ import ShareLinkButton from '@/components/calculator/ShareLinkButton';
 import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
 import { PdfCompanyHeader, PdfCoverDetails, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 import PdfPresetSections from '@/components/calculator/PdfPresetSections';
-import { fetchAllPresetResults, PresetResults } from '@/lib/presetResults';
+import { fetchAllPresetResults, PresetLinks, presetLinks, PresetResults, presetShareFooter } from '@/lib/presetResults';
 
 // One order card on the dashboard. `items` are the rows its form starts with
 // (empty for a new order, or loaded from a saved calculation); live edits are
@@ -137,7 +137,7 @@ function DashboardInner() {
   // The results block the PDF is captured from
   const planRef = useRef<HTMLDivElement>(null);
   // The plan under all three presets, drawn into the PDF only while it is captured
-  const [pdfResults, setPdfResults] = useState<PresetResults | null>(null);
+  const [pdfData, setPdfData] = useState<{ results: PresetResults; links?: PresetLinks } | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   // Orders the current result was calculated from — what Save stores
   const [calculatedOrders, setCalculatedOrders] = useState<ShipmentOrder[]>([]);
@@ -382,9 +382,14 @@ function DashboardInner() {
     try {
       // The PDF holds the plan under every preset, whichever one is selected here;
       // the current preset's section keeps any floor moves
-      const all = await fetchAllPresetResults(calculatedOrders, withLayout(result, positions));
-      flushSync(() => setPdfResults(all));
-      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), id ? await planShareUrlForPdf(id) : undefined);
+      const [all, shareUrl] = await Promise.all([
+        fetchAllPresetResults(calculatedOrders, withLayout(result, positions)),
+        id ? planShareUrlForPdf(id) : Promise.resolve(undefined),
+      ]);
+      // Each preset section links to its own 3D page: /plan/{token}?preset=…
+      const links = shareUrl ? await presetLinks(shareUrl) : undefined;
+      flushSync(() => setPdfData({ results: all, links }));
+      await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), links && presetShareFooter(links, result.preset));
       setPdfStatus('done');
       // Clear the form for the next calculation once the confirmation has been seen
       resetTimer.current = setTimeout(handleReset, 2000);
@@ -392,7 +397,7 @@ function DashboardInner() {
       console.error(e);
       setPdfStatus('error');
     } finally {
-      setPdfResults(null);
+      setPdfData(null);
     }
   }
 
@@ -602,7 +607,7 @@ function DashboardInner() {
                 maxPalletGrossKg={maxPalletGrossKg}
               />
             </div>
-            <PdfPresetSections results={pdfResults} />
+            <PdfPresetSections results={pdfData?.results ?? null} links={pdfData?.links} />
           </div>
         )}
 

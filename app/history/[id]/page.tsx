@@ -13,7 +13,7 @@ import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/export
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
 import PdfPresetSections from '@/components/calculator/PdfPresetSections';
-import { fetchAllPresetResults, PresetResults } from '@/lib/presetResults';
+import { fetchAllPresetResults, PresetLinks, presetLinks, PresetResults, presetShareFooter } from '@/lib/presetResults';
 
 interface SavedCalculation {
   id: number;
@@ -55,7 +55,7 @@ function CalculationDetail() {
   const planRef = useRef<HTMLDivElement>(null);
   const exported = useRef(false);
   // The plan under all three presets, drawn into the PDF only while it is captured
-  const [pdfResults, setPdfResults] = useState<PresetResults | null>(null);
+  const [pdfData, setPdfData] = useState<{ results: PresetResults; links?: PresetLinks } | null>(null);
 
   async function handleExport() {
     if (!calc || !planRef.current) return;
@@ -63,15 +63,20 @@ function CalculationDetail() {
     try {
       // Every preset, re-run server-side on the saved order lines; the saved
       // result stands in for its own preset (keeping any hand-moved layout)
-      const all = await fetchAllPresetResults(savedOrders(calc), calc.result);
-      flushSync(() => setPdfResults(all));
-      await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName), await planShareUrlForPdf(calc.id));
+      const [all, shareUrl] = await Promise.all([
+        fetchAllPresetResults(savedOrders(calc), calc.result),
+        planShareUrlForPdf(calc.id),
+      ]);
+      // Each preset section links to its own 3D page: /plan/{token}?preset=…
+      const links = shareUrl ? await presetLinks(shareUrl) : undefined;
+      flushSync(() => setPdfData({ results: all, links }));
+      await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName), links && presetShareFooter(links, calc.result.preset));
       setPdfStatus('idle');
     } catch (e) {
       console.error(e);
       setPdfStatus('error');
     } finally {
-      setPdfResults(null);
+      setPdfData(null);
     }
   }
 
@@ -212,7 +217,7 @@ function CalculationDetail() {
               />
               <PalletPlanTable pallets={calc.result.pallets} />
             </div>
-            <PdfPresetSections results={pdfResults} />
+            <PdfPresetSections results={pdfData?.results ?? null} links={pdfData?.links} />
           </div>
         )}
       </div>

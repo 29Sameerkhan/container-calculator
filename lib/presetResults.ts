@@ -1,5 +1,5 @@
 import { RulePreset, ShipmentOrder, ShipmentResult } from '@/lib/types';
-import { DEFAULT_PRESET, RULE_PRESETS } from '@/lib/constants';
+import { DEFAULT_PRESET, PRESET_LABELS, RULE_PRESETS } from '@/lib/constants';
 
 // A preset whose calculation failed holds the error message instead
 export type PresetResults = Record<RulePreset, ShipmentResult | { error: string }>;
@@ -30,4 +30,30 @@ export async function fetchAllPresetResults(
     }
   }));
   return Object.fromEntries(entries) as PresetResults;
+}
+
+export interface PresetLink {
+  url: string;
+  qr: string;   // QR code image (data URL) for the printed page
+}
+
+export type PresetLinks = Record<RulePreset, PresetLink>;
+
+// The plan's public 3D page under each preset: /plan/{token}?preset=…
+export async function presetLinks(shareUrl: string): Promise<PresetLinks> {
+  const { toDataURL } = await import('qrcode');
+  const entries = await Promise.all(RULE_PRESETS.map(async (preset): Promise<[RulePreset, PresetLink]> => {
+    const url = `${shareUrl}?preset=${preset}`;
+    return [preset, { url, qr: await toDataURL(url, { margin: 1, width: 240 }) }];
+  }));
+  return Object.fromEntries(entries) as PresetLinks;
+}
+
+// The PDF's last-page footer: every preset's 3D link, the QR code for the preset
+// the plan was saved with
+export function presetShareFooter(links: PresetLinks, savedPreset: RulePreset = DEFAULT_PRESET) {
+  return {
+    qrUrl: links[savedPreset].url,
+    links: RULE_PRESETS.map(p => ({ label: PRESET_LABELS[p], url: links[p].url })),
+  };
 }

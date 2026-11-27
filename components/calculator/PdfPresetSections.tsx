@@ -1,6 +1,6 @@
 'use client';
 
-import { PresetResults } from '@/lib/presetResults';
+import { PresetLinks, PresetResults } from '@/lib/presetResults';
 import { PRESET_LABELS, PRESET_SUMMARIES, RULE_PRESETS } from '@/lib/constants';
 import { ShipmentResult } from '@/lib/types';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
@@ -21,7 +21,9 @@ function kg(n: number) {
 
 // PDF only: the plan under each rule preset, Standard, Relaxed then Freepack,
 // each starting on a new page. Hidden on screen; shown when the PDF is captured.
-export default function PdfPresetSections({ results }: { results: PresetResults | null }) {
+// links: each preset's own 3D page (/plan/{token}?preset=…), printed with a QR
+// code in its section; absent when the plan has no share link
+export default function PdfPresetSections({ results, links }: { results: PresetResults | null; links?: PresetLinks }) {
   if (!results) return null;
   return (
     <div data-pdf-only className="hidden">
@@ -55,6 +57,7 @@ export default function PdfPresetSections({ results }: { results: PresetResults 
                 </div>
                 <span className={`rounded-lg border-2 px-4 py-2 text-lg font-bold ${badge.className}`}>{label}</span>
               </div>
+              {links && <ViewIn3d preset={preset} link={links[preset]} />}
               <div className="grid grid-cols-4 gap-4 pt-4 border-t border-gray-100">
                 <Stat
                   label={r.pallets.some(p => p.kind === 'crate') ? 'Pallets + Crates' : 'Total Pallets'}
@@ -73,6 +76,19 @@ export default function PdfPresetSections({ results }: { results: PresetResults 
           </section>
         );
       })}
+    </div>
+  );
+}
+
+function ViewIn3d({ preset, link }: { preset: keyof PresetLinks; link: PresetLinks[keyof PresetLinks] }) {
+  return (
+    <div className="flex items-center gap-4 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
+      {/* eslint-disable-next-line @next/next/no-img-element -- a data URL captured into the PDF */}
+      <img src={link.qr} alt={`QR code: ${PRESET_LABELS[preset]} plan in 3D`} width={72} height={72} />
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-gray-800">View this plan in 3D — Rules: {PRESET_LABELS[preset]}</p>
+        <p className="text-xs text-blue-700 break-all">{link.url}</p>
+      </div>
     </div>
   );
 }
