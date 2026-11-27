@@ -4,7 +4,7 @@ import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } fro
 import { PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
 import {
   applyPositions, CONTAINER_INNER_WIDTH_MM, CONTAINERS, floorLayout, footprintLabel, footprintLength, footprintWidth,
-  LayoutIssue, overlaps, PlacedPallet, sideLanes, stackRefusal, validateLayout,
+  findFreeSpot, LayoutIssue, overlaps, PlacedPallet, sideLanes, stackRefusal, validateLayout,
 } from '@/lib/engine/floorPlan';
 import { familyColorMap } from '@/lib/familyColors';
 
@@ -82,7 +82,7 @@ interface Drag {
 interface Toast {
   id: number;
   message: string;
-  tone: 'error' | 'info';
+  tone: 'error' | 'warning' | 'info';
 }
 
 export default function ContainerFloorPlan({
@@ -110,7 +110,7 @@ export default function ContainerFloorPlan({
   );
   const issues = useMemo(
     () => (editable && layout && maxPalletGrossKg !== undefined
-      ? validateLayout(placed, containerLength, maxPalletGrossKg)
+      ? validateLayout(placed, containerLength, maxPalletGrossKg, positions)
       : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [editable, placed, containerLength, maxPalletGrossKg],
@@ -183,7 +183,7 @@ export default function ContainerFloorPlan({
       showToasts([`${top.pallet.palletId} stacked on ${bottom.pallet.palletId}.`], 'info');
       return;
     }
-    const errors = validateLayout(after, layout.containerLength, maxPalletGrossKg ?? Infinity)
+    const errors = validateLayout(after, layout.containerLength, maxPalletGrossKg ?? Infinity, next)
       .filter(i => i.severity === 'error' && i.palletIds.includes(id));
     onPositionsChange(next);
     showToasts(errors.map(i => i.message));
@@ -214,12 +214,31 @@ export default function ContainerFloorPlan({
     };
   }
 
-  // Undoes a stack made by hand: the top pallet goes back to its own position
-  // (it may overlap something there; the layout checks will say so)
-  function unstack(topId: string) {
-    const pos = positions?.[topId];
-    if (!onPositionsChange || !pos?.stackedOn) return;
-    onPositionsChange({ ...positions, [topId]: { x: pos.x, y: pos.y } });
+  // Takes the top pallet off a stack, whether the engine or a drag made it, and
+  // puts it in the free floor space nearest the stack. If no space is free it goes
+  // just past the container end, and the layout checks warn (without blocking
+  // Save) that the load may not fit.
+  function unstack(unit: PlacedPallet) {
+    const top = unit.stackedPallet;
+    if (!onPositionsChange || !layout || !top) return;
+    const topId = top.palletId;
+    // Split, for now standing where the stack stands
+    const split = { ...positions, [topId]: { x: unit.x, y: unit.y } };
+    const after = applyPositions(layout.placed, split, layout.containerLength);
+    const topUnit = after.find(u => u.pallet.palletId === topId);
+    const others = after.filter(u => u.pallet.palletId !== topId);
+    if (!topUnit) return;
+    const len = footprintLength(topUnit);
+    const wid = footprintWidth(topUnit);
+    const spot = findFreeSpot(others, len, wid, { x: unit.x, y: unit.y }, layout.containerLength);
+    if (spot) {
+      onPositionsChange({ ...positions, [topId]: spot });
+      showToasts([`${topId} unstacked from ${unit.pallet.palletId} and moved to the nearest free floor space.`], 'info');
+      return;
+    }
+    const pastEnd = Math.max(layout.containerLength, ...others.map(o => o.x + footprintLength(o)));
+    onPositionsChange({ ...positions, [topId]: { x: pastEnd, y: 0, unstacked: true } });
+    showToasts([`Unstacking this pair means the load may not fit — verify with Mahendra. No free floor space was left for ${topId}.`], 'warning');
   }
 
   function handlePointerDown(e: PointerEvent<SVGGElement>, p: PlacedPallet) {
@@ -346,10 +365,11 @@ export default function ContainerFloorPlan({
   const selectedPartner = selectedUnit?.stackedPallet
     ? (selectedIsTop ? selectedUnit.pallet : selectedUnit.stackedPallet)
     : undefined;
-  // A stack made by hand can be undone; one the engine made can't (Reset restores it)
+  // Whether the selected stack was made by hand (by a drag) or by the engine
   const handStackTop = selectedUnit?.stackedPallet && positions?.[selectedUnit.stackedPallet.palletId]?.stackedOn
     ? selectedUnit.stackedPallet.palletId
     : null;
+  const selectedStack = editable && selectedUnit?.stackedPallet ? selectedUnit : null;
   // Only what this container holds: a split shipment draws its first container
   const totalCBM = placed.reduce((s, p) => s + p.pallet.cbm + (p.stackedPallet?.cbm ?? 0), 0);
   const maxCBM = container.LENGTH * C_WIDTH_MM * container.HEIGHT / 1e9;
@@ -418,17 +438,27 @@ export default function ContainerFloorPlan({
             <p className="text-sm font-semibold text-blue-900">Drag pallets to reposition · Errors shown below</p>
             <p className="text-xs text-blue-700 mt-0.5">
               {view === 'top'
-                ? 'Drop a pallet onto another to stack it (if the stacking limits allow). Click to select; arrow keys nudge 10 mm (Shift: 100 mm).'
+                ? 'Drop a pallet onto another to stack it (if the stacking limits allow); click a stack to unstack it. Click to select; arrow keys nudge 10 mm (Shift: 100 mm).'
                 : 'Switch to the Top view to move pallets.'}
             </p>
           </div>
-          <button
-            onClick={() => onPositionsChange?.({})}
-            disabled={!isMoved}
-            className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed rounded-lg px-4 py-2 transition-colors"
-          >
-            ↺ Reset to auto layout
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {selectedStack && (
+              <button
+                onClick={() => unstack(selectedStack)}
+                className="text-sm font-semibold text-blue-700 bg-white border border-blue-300 hover:bg-blue-100 rounded-lg px-4 py-2 transition-colors"
+              >
+                ⇵ Unstack {footprintLabel(selectedStack)}
+              </button>
+            )}
+            <button
+              onClick={() => onPositionsChange?.({})}
+              disabled={!isMoved}
+              className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed rounded-lg px-4 py-2 transition-colors"
+            >
+              ↺ Reset to auto layout
+            </button>
+          </div>
         </div>
       )}
 
@@ -614,10 +644,10 @@ export default function ContainerFloorPlan({
                 {' · '}combined H {selectedPallet.heightMm + selectedPartner.heightMm} mm
                 {' · '}{selectedPallet.totalGrossKg + selectedPartner.totalGrossKg} kg gross
               </span>
-              {editable && handStackTop && (
+              {selectedStack && (
                 <button
                   data-pdf-hide
-                  onClick={() => unstack(handStackTop)}
+                  onClick={() => unstack(selectedStack)}
                   className="font-semibold text-blue-700 border border-blue-300 hover:bg-blue-100 rounded px-2 py-0.5"
                 >
                   Unstack
@@ -660,15 +690,17 @@ export default function ContainerFloorPlan({
             <div
               key={t.id}
               className={`flex items-start gap-3 rounded-lg border bg-white shadow-lg px-4 py-3 text-sm ${
-                t.tone === 'error' ? 'border-red-200 text-red-700' : 'border-green-200 text-green-800'
+                t.tone === 'error' ? 'border-red-200 text-red-700'
+                  : t.tone === 'warning' ? 'border-amber-200 text-amber-800'
+                    : 'border-green-200 text-green-800'
               }`}
             >
-              <span aria-hidden>{t.tone === 'error' ? '⚠' : '↑'}</span>
+              <span aria-hidden>{t.tone === 'info' ? '↑' : '⚠'}</span>
               <span className="flex-1">{t.message}</span>
               <button
                 onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
                 aria-label="Dismiss"
-                className={t.tone === 'error' ? 'text-red-400 hover:text-red-700' : 'text-green-500 hover:text-green-800'}
+                className={t.tone === 'error' ? 'text-red-400 hover:text-red-700' : t.tone === 'warning' ? 'text-amber-500 hover:text-amber-800' : 'text-green-500 hover:text-green-800'}
               >
                 ×
               </button>

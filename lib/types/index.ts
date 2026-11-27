@@ -120,10 +120,14 @@ export interface PresetConfig {
 // container's front-left corner (x along the length, y across the width).
 // stackedOn: the pallet was stacked by hand on top of that floor pallet (its
 // x/y are then ignored; it stands wherever that pallet stands).
+// An entry for the top pallet of a stack the engine made takes it off that stack.
+// unstacked: taken off a stack with no free floor space left, so it was put past
+// the container end; its fit is a warning to verify, not an error.
 export interface FloorPosition {
   x: number;
   y: number;
   stackedOn?: string;
+  unstacked?: boolean;
 }
 
 export type PalletPositions = Record<string, FloorPosition>;
