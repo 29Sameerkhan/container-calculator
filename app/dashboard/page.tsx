@@ -11,7 +11,7 @@ import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import { OrderItem, PalletPositions, RulePreset, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import PresetSelector from '@/components/calculator/PresetSelector';
 import { DEFAULT_PRESET, isRulePreset, PRESET_CONFIGS } from '@/lib/constants';
-import { applyPositions, floorLayout, validateLayout } from '@/lib/engine/floorPlan';
+import { applyPositions, floorLayout, validateLayout, withStackFields } from '@/lib/engine/floorPlan';
 import ShareLinkButton from '@/components/calculator/ShareLinkButton';
 import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
 import { PdfCompanyHeader, PdfCoverDetails, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
@@ -96,13 +96,15 @@ async function runEngine(submitOrders: ShipmentOrder[], preset: RulePreset): Pro
   return data.result;
 }
 
-// The result as it should be stored: hand-moved floor positions written into
-// placed, so history, the share link and the PDF all draw the edited layout
+// The result as it should be stored: hand-moved floor positions and hand-made
+// stacks written into placed (and the pallets' stack fields), so history, the
+// share link and the PDF all draw the edited layout
 function withLayout(result: ShipmentResult, positions: PalletPositions): ShipmentResult {
   if (Object.keys(positions).length === 0) return result;
   const layout = floorLayout(result.pallets, result.containerRecommendation, result.placed);
   if (!layout) return result;
-  return { ...result, placed: applyPositions(layout.placed, positions, layout.containerLength), manualLayout: true };
+  const placed = applyPositions(layout.placed, positions, layout.containerLength);
+  return { ...result, pallets: withStackFields(result.pallets, placed), placed, manualLayout: true };
 }
 
 const INPUT_CLASS =
