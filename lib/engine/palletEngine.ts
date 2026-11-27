@@ -3,23 +3,22 @@ import {
   PalletLayer,
   PalletPlan,
   PlacedPallet,
+  PresetConfig,
+  RulePreset,
   ShipmentResult,
 } from '@/lib/types';
 import {
   CONTAINERS,
   PUMP_PALLET_FAMILIES,
-  PUMP_PALLET_WIDTH_MM,
-  MOTOR_PALLET_WIDTH_MM,
   MOTORS_PER_ROW,
   WOOD_WEIGHT,
-  MAX_PUMP_TOTAL_HEIGHT_MM,
-  MAX_MOTOR_TOTAL_HEIGHT_MM,
   PALLET_BASE_HEIGHT_MM,
-  MAX_PALLET_GROSS_KG,
   MAX_STACKABLE_PALLET_KG,
   MAX_STACKED_PAIR_KG,
   MAX_PUMP_PALLET_LENGTH_MM,
   LCL_SUGGEST_BELOW_KG,
+  PRESET_CONFIGS,
+  DEFAULT_PRESET,
 } from '@/lib/constants';
 import { packPallets } from '@/lib/engine/floorPlan';
 import { normaliseProductCode } from '@/lib/engine/utils';
@@ -39,15 +38,19 @@ const MAX_CROSS_POOL_WIDTH_GAP_MM = 100;
 const CLUB_MAX_BOXES = 15;
 const CLUB_FACE_SIZES_MM = [100, 152];
 
+// Pallet width, height and weight limits come from the rule preset. Every helper
+// takes the config explicitly; callers that pass none get the Standard rules.
+const STANDARD = PRESET_CONFIGS.standard;
+
 function isMotor(item: OrderItem): boolean {
   return item.productType.startsWith('motor-');
 }
 
 
 
-export function resolvePalletWidth(item: OrderItem): number {
+export function resolvePalletWidth(item: OrderItem, cfg: PresetConfig = STANDARD): number {
   // One motor pallet width for every series (standardised per Kiran sir, 19 Nov 2026)
-  if (isMotor(item)) return MOTOR_PALLET_WIDTH_MM;
+  if (isMotor(item)) return cfg.motorPalletWidthMm;
   if (item.productType === 'controller' || item.productType === 'spare') {
     console.warn('Controller/spare pallet width defaulting to 715mm — confirm with Mahendra');
     return 715;
@@ -56,7 +59,7 @@ export function resolvePalletWidth(item: OrderItem): number {
     throw new Error(`Unknown pallet family: ${item.palletFamily}`);
   }
   // One pump pallet width for every family (standardised per Kiran sir, 19 Nov 2026)
-  return PUMP_PALLET_WIDTH_MM;
+  return cfg.pumpPalletWidthMm;
 }
 
 export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number {
@@ -71,13 +74,14 @@ export function resolveWoodWeight(item: OrderItem, isMixedSku: boolean): number 
 
 export function computeMotorPalletGeometry(
   item: OrderItem,
-  qty: number
+  qty: number,
+  cfg: PresetConfig = STANDARD,
 ): { lengthMm: number; widthMm: number; heightMm: number; motorsPerLayer: number; layers: number } {
-  const palletWidthMm = resolvePalletWidth(item);
+  const palletWidthMm = resolvePalletWidth(item, cfg);
   // Always 3 motors across, whatever the box width (Kiran sir, 19 Nov 2026)
   const motorsPerLayer = MOTORS_PER_ROW;
   // Motor pallet height cap is total from floor, wood base included
-  const maxLayers = Math.floor((MAX_MOTOR_TOTAL_HEIGHT_MM - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
+  const maxLayers = Math.floor((cfg.maxMotorTotalHeightMm - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
   const layers = Math.max(1, Math.min(maxLayers, Math.ceil(qty / motorsPerLayer)));
   const columns = Math.ceil(qty / (motorsPerLayer * layers));
   const lengthMm = columns * item.boxLengthMm;
@@ -156,12 +160,13 @@ function palletGrossKg(skus: PalletSku[]): number {
   return boxesGrossKg(skus) + woodKg(skus);
 }
 
-// Pumps with the same face size pool together whatever their pallet width
-function consolidationKey(item: OrderItem): string {
+// Pumps with the same face size pool together whatever their pallet width.
+// When the preset allows mixed families, every motor series shares one pool.
+function consolidationKey(item: OrderItem, cfg: PresetConfig): string {
   const customer = item.customer ?? 'default';
   if (item.productType === 'pump') return `${customer}::pump::f${item.boxWidthMm}x${item.boxHeightMm}`;
-  const category = isMotor(item) ? `motor-${item.productType}` : 'pump';
-  return `${customer}::${category}::w${resolvePalletWidth(item)}`;
+  const category = isMotor(item) ? (cfg.allowCrossFamily ? 'motor' : `motor-${item.productType}`) : 'pump';
+  return `${customer}::${category}::w${resolvePalletWidth(item, cfg)}`;
 }
 
 function groupGrossKg(items: OrderItem[]): number {
@@ -187,18 +192,18 @@ function canSitOn(layer: PalletSku, below: PalletSku): boolean {
 }
 
 // Whether every pump in one group may share a pallet with every pump in the other
-function poolsWithinGap(a: PalletSku[], b: PalletSku[]): boolean {
+function poolsWithinGap(a: PalletSku[], b: PalletSku[], cfg: PresetConfig): boolean {
   return a.every(x => b.every(y =>
-    Math.abs(resolvePalletWidth(x.item) - resolvePalletWidth(y.item)) <= MAX_CROSS_POOL_WIDTH_GAP_MM
+    Math.abs(resolvePalletWidth(x.item, cfg) - resolvePalletWidth(y.item, cfg)) <= MAX_CROSS_POOL_WIDTH_GAP_MM
   ));
 }
 
 // Whether these layers, bottom first, can make up one pallet of this width
-function fitsOnePallet(skus: PalletSku[], widthMm: number): boolean {
+function fitsOnePallet(skus: PalletSku[], widthMm: number, cfg: PresetConfig): boolean {
   return (
     skus.every((layer, i) => i === 0 || canSitOn(layer, skus[i - 1])) &&
-    palletGrossKg(skus) <= MAX_PALLET_GROSS_KG &&
-    layeredHeightMm(skus, widthMm) <= MAX_PUMP_TOTAL_HEIGHT_MM
+    palletGrossKg(skus) <= cfg.maxPalletGrossKg &&
+    layeredHeightMm(skus, widthMm) <= cfg.maxPumpTotalHeightMm
   );
 }
 
@@ -216,11 +221,12 @@ function shareSplitPallets(
   upper: PalletSku,
   pallets: number,
   fullPalletQty: number,
+  cfg: PresetConfig,
 ): PalletSku[][] | null {
-  const widthMm = Math.max(resolvePalletWidth(lower.item), resolvePalletWidth(upper.item));
-  if (!poolsWithinGap([lower], [upper])) return null;
+  const widthMm = Math.max(resolvePalletWidth(lower.item, cfg), resolvePalletWidth(upper.item, cfg));
+  if (!poolsWithinGap([lower], [upper], cfg)) return null;
   const leftover = { item: lower.item, qty: lower.qty - (pallets - 1) * fullPalletQty };
-  if (fitsOnePallet([leftover, upper], widthMm)) return null;
+  if (fitsOnePallet([leftover, upper], widthMm, cfg)) return null;
 
   const lowerShares = evenShares(lower.qty, pallets);
   const upperShares = evenShares(upper.qty, pallets);
@@ -228,7 +234,7 @@ function shareSplitPallets(
     { item: lower.item, qty },
     ...(upperShares[i] > 0 ? [{ item: upper.item, qty: upperShares[i] }] : []),
   ]);
-  return shared.every(skus => fitsOnePallet(skus, widthMm)) ? shared : null;
+  return shared.every(skus => fitsOnePallet(skus, widthMm, cfg)) ? shared : null;
 }
 
 // Fills pallets from one pool, longest tube first. Each product is a layer on top
@@ -237,7 +243,7 @@ function shareSplitPallets(
 // it won't fit this one. A product too big for one pallet tops up this pallet only
 // if that doesn't put it on an extra pallet, and may share its pallets with a
 // shorter product (see shareSplitPallets).
-function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
+function buildPumpDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] {
   const drafts: PalletDraft[] = [];
   // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
   const sorted = [...items].sort(bottomLayerFirst);
@@ -258,10 +264,10 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
 
   sorted.forEach((item, index) => {
     if (sharedAway.has(item)) return;
-    const itemWidthMm = resolvePalletWidth(item);
+    const itemWidthMm = resolvePalletWidth(item, cfg);
     const boxesFitting = (usedKg: number, usedHeightMm: number, widthMm: number) => Math.min(
-      Math.floor((MAX_PALLET_GROSS_KG - woodReserveKg - usedKg) / item.grossWeightKg),
-      Math.floor((MAX_PUMP_TOTAL_HEIGHT_MM - usedHeightMm) / item.boxHeightMm) *
+      Math.floor((cfg.maxPalletGrossKg - woodReserveKg - usedKg) / item.grossWeightKg),
+      Math.floor((cfg.maxPumpTotalHeightMm - usedHeightMm) / item.boxHeightMm) *
         boxesAcrossFor(item, widthMm),
     );
     // A single box over a limit still gets a pallet of its own
@@ -273,10 +279,10 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
         const lower = { item, qty: remaining };
         const pallets = Math.ceil(remaining / onNewPallet);
         const upper = sorted.slice(index + 1).find(i => !sharedAway.has(i));
-        const shared = upper && shareSplitPallets(lower, { item: upper, qty: upper.quantity }, pallets, onNewPallet);
+        const shared = upper && shareSplitPallets(lower, { item: upper, qty: upper.quantity }, pallets, onNewPallet, cfg);
         if (upper && shared) {
           sharedAway.add(upper);
-          const palletWidth = Math.max(itemWidthMm, resolvePalletWidth(upper));
+          const palletWidth = Math.max(itemWidthMm, resolvePalletWidth(upper, cfg));
           shared.slice(0, -1).forEach(p => drafts.push({ skus: p, widthMm: palletWidth, motorOnly: false }));
           // The last pallet stays open for more layers
           skus = shared[shared.length - 1];
@@ -291,7 +297,7 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
       if (skus.length > 0) {
         const below = skus[skus.length - 1];
         widthMm = Math.max(palletWidthMm, itemWidthMm);
-        const blocked = item.boxWidthMm > below.item.boxWidthMm || !poolsWithinGap(skus, [{ item, qty: 1 }]);
+        const blocked = item.boxWidthMm > below.item.boxWidthMm || !poolsWithinGap(skus, [{ item, qty: 1 }], cfg);
         const fits = blocked ? 0 : boxesFitting(grossKg, layeredHeightMm(skus, widthMm), widthMm);
         const fitsWhole = remaining <= fits;
         const palletsIfNew = Math.ceil(remaining / onNewPallet);
@@ -317,15 +323,15 @@ function buildPumpDrafts(items: OrderItem[]): PalletDraft[] {
 // Each HP variant fills its own pallets up to the weight limit. What's left of each
 // variant is then clubbed in bottom-layer order, each remainder staying whole on the
 // first pallet it fits. Remainders that don't fit start another pallet.
-function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
+function buildMotorDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] {
   const drafts: PalletDraft[] = [];
-  const widthMm = resolvePalletWidth(items[0]);
+  const widthMm = resolvePalletWidth(items[0], cfg);
   const remainders: PalletSku[] = [];
 
   for (const item of [...items].sort((a, b) => b.quantity - a.quantity)) {
     // A single motor over the weight limit still gets a pallet of its own
     const perPallet = Math.max(1, Math.floor(
-      (MAX_PALLET_GROSS_KG - resolveWoodWeight(item, false)) / item.grossWeightKg
+      (cfg.maxPalletGrossKg - resolveWoodWeight(item, false)) / item.grossWeightKg
     ));
     for (let i = 0; i < Math.floor(item.quantity / perPallet); i++) {
       drafts.push({ skus: [{ item, qty: perPallet }], widthMm, motorOnly: true });
@@ -337,7 +343,7 @@ function buildMotorDrafts(items: OrderItem[]): PalletDraft[] {
   const clubbed: PalletSku[][] = [];
   // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
   for (const remainder of remainders.sort((a, b) => bottomLayerFirst(a.item, b.item))) {
-    const pallet = clubbed.find(skus => palletGrossKg([...skus, remainder]) <= MAX_PALLET_GROSS_KG);
+    const pallet = clubbed.find(skus => palletGrossKg([...skus, remainder]) <= cfg.maxPalletGrossKg);
     if (pallet) pallet.push(remainder);
     else clubbed.push([remainder]);
   }
@@ -354,13 +360,13 @@ function isPumpDraft(d: PalletDraft): boolean {
 }
 
 // Whether another pallet's boxes fit as new layers on top of this one
-function canAbsorb(host: PalletDraft, guestSkus: PalletSku[], widthMm: number): boolean {
-  return fitsOnePallet([...host.skus, ...guestSkus], widthMm);
+function canAbsorb(host: PalletDraft, guestSkus: PalletSku[], widthMm: number, cfg: PresetConfig): boolean {
+  return fitsOnePallet([...host.skus, ...guestSkus], widthMm, cfg);
 }
 
 // A pump pallet goes on top of another pump pallet, including one from another
 // pool, when it fits. The merged pallet takes the wider of the two widths.
-function mergeSmallPumpPallets(drafts: PalletDraft[]): PalletDraft[] {
+function mergeSmallPumpPallets(drafts: PalletDraft[], cfg: PresetConfig): PalletDraft[] {
   let result = drafts;
   const longestFirst = [...drafts].sort((a, b) => longestBoxMm(b.skus) - longestBoxMm(a.skus));
   for (const guest of longestFirst) {
@@ -370,8 +376,8 @@ function mergeSmallPumpPallets(drafts: PalletDraft[]): PalletDraft[] {
         d !== guest &&
         isPumpDraft(d) &&
         sameCustomer(d, guest) &&
-        poolsWithinGap(d.skus, guest.skus) &&
-        canAbsorb(d, guest.skus, Math.max(d.widthMm, guest.widthMm))
+        poolsWithinGap(d.skus, guest.skus, cfg) &&
+        canAbsorb(d, guest.skus, Math.max(d.widthMm, guest.widthMm), cfg)
       )
       .sort((a, b) => palletGrossKg(b.skus) - palletGrossKg(a.skus))[0];
     if (!host) continue;
@@ -403,21 +409,27 @@ function clubbedDraft(a: PalletDraft, b: PalletDraft): PalletDraft {
 // weight and height limits. Only those limits apply: these pools would not merge
 // under the layering rules in fitsOnePallet. Heaviest pallets are paired first, each
 // with the heaviest partner that fits; a clubbed pallet isn't clubbed again.
-function clubLeftovers(drafts: PalletDraft[]): PalletDraft[] {
+// When the preset allows mixed families, any two small pump pallets of one
+// customer may be clubbed, whatever their face sizes.
+function clubLeftovers(drafts: PalletDraft[], cfg: PresetConfig): PalletDraft[] {
   const result = [...drafts];
+  const clubbable = (d: PalletDraft) => cfg.allowCrossFamily
+    ? isPumpDraft(d) && boxCount(d.skus) <= CLUB_MAX_BOXES
+    : clubFaceMm(d) !== null;
   const candidates = drafts
-    .filter(d => clubFaceMm(d) !== null)
+    .filter(clubbable)
     .sort((a, b) => palletGrossKg(b.skus) - palletGrossKg(a.skus));
   const used = new Set<PalletDraft>();
 
   for (const a of candidates) {
     if (used.has(a)) continue;
     for (const b of candidates) {
-      if (used.has(b) || clubFaceMm(a) === clubFaceMm(b) || !sameCustomer(a, b)) continue;
+      if (used.has(b) || a === b || !sameCustomer(a, b)) continue;
+      if (!cfg.allowCrossFamily && clubFaceMm(a) === clubFaceMm(b)) continue;
       const clubbed = clubbedDraft(a, b);
       if (
-        palletGrossKg(clubbed.skus) > MAX_PALLET_GROSS_KG ||
-        layeredHeightMm(clubbed.skus, clubbed.widthMm) > MAX_PUMP_TOTAL_HEIGHT_MM
+        palletGrossKg(clubbed.skus) > cfg.maxPalletGrossKg ||
+        layeredHeightMm(clubbed.skus, clubbed.widthMm) > cfg.maxPumpTotalHeightMm
       ) continue;
       used.add(a);
       used.add(b);
@@ -431,7 +443,7 @@ function clubLeftovers(drafts: PalletDraft[]): PalletDraft[] {
 
 // Motor pallets go on top of a pump pallet when they fit. Returns the motor
 // pallets that still stand on their own.
-function mergeSmallMotorPallets(motors: PalletDraft[], pumps: PalletDraft[]): PalletDraft[] {
+function mergeSmallMotorPallets(motors: PalletDraft[], pumps: PalletDraft[], cfg: PresetConfig): PalletDraft[] {
   return motors.filter(guest => {
     // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
     const longestFirst = [...guest.skus].sort((a, b) => bottomLayerFirst(a.item, b.item));
@@ -440,7 +452,7 @@ function mergeSmallMotorPallets(motors: PalletDraft[], pumps: PalletDraft[]): Pa
         d.skus[0].item.productType === 'pump' &&
         sameCustomer(d, guest) &&
         guest.skus.every(s => s.item.boxWidthMm <= d.widthMm) &&
-        canAbsorb(d, longestFirst, d.widthMm)
+        canAbsorb(d, longestFirst, d.widthMm, cfg)
       )
       .sort((a, b) => palletGrossKg(b.skus) - palletGrossKg(a.skus))[0];
     if (!host) return true;
@@ -450,7 +462,7 @@ function mergeSmallMotorPallets(motors: PalletDraft[], pumps: PalletDraft[]): Pa
 }
 
 
-function finalizePallet(draft: PalletDraft, index: number): PalletPlan {
+function finalizePallet(draft: PalletDraft, index: number, cfg: PresetConfig): PalletPlan {
   const { skus, widthMm, motorOnly } = draft;
   const totalQty = boxCount(skus);
   const bottom = skus[0].item;
@@ -460,7 +472,7 @@ function finalizePallet(draft: PalletDraft, index: number): PalletPlan {
   if (motorOnly) {
     // Mixed pallets are as long as their longest motor box
     const longest = skus.reduce((a, b) => (b.item.boxLengthMm > a.item.boxLengthMm ? b : a)).item;
-    ({ lengthMm, heightMm } = computeMotorPalletGeometry(longest, totalQty));
+    ({ lengthMm, heightMm } = computeMotorPalletGeometry(longest, totalQty, cfg));
   } else {
     layers = buildLayers(skus, widthMm);
     lengthMm = longestBoxMm(skus);
@@ -497,7 +509,7 @@ function finalizePallet(draft: PalletDraft, index: number): PalletPlan {
   };
 }
 
-export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
+export function buildPalletPlans(items: OrderItem[], cfg: PresetConfig = STANDARD): PalletPlan[] {
   const groups = new Map<string, OrderItem[]>();
 
   // A product code entered on several lines is one line with the summed
@@ -513,7 +525,7 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
   }
 
   for (const item of Array.from(merged.values())) {
-    const key = consolidationKey(item);
+    const key = consolidationKey(item, cfg);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(item);
   }
@@ -523,14 +535,16 @@ export function buildPalletPlans(items: OrderItem[]): PalletPlan[] {
 
   // All pump pallets first, then motors, which may finish on top of a pump pallet
   const pumps = clubLeftovers(mergeSmallPumpPallets(
-    sortedGroups.filter(g => !isMotor(g[0])).flatMap(buildPumpDrafts)
-  ));
+    sortedGroups.filter(g => !isMotor(g[0])).flatMap(g => buildPumpDrafts(g, cfg)),
+    cfg,
+  ), cfg);
   const motors = mergeSmallMotorPallets(
-    sortedGroups.filter(g => isMotor(g[0])).flatMap(buildMotorDrafts),
+    sortedGroups.filter(g => isMotor(g[0])).flatMap(g => buildMotorDrafts(g, cfg)),
     pumps,
+    cfg,
   );
 
-  return [...pumps, ...motors].map(finalizePallet);
+  return [...pumps, ...motors].map((draft, i) => finalizePallet(draft, i, cfg));
 }
 
 // ─── Stacking ────────────────────────────────────────────────────────────────
@@ -646,9 +660,17 @@ function loadInto40ftContainers(pallets: PalletPlan[]): PlacedPallet[][] {
   return loads;
 }
 
-export function computeShipment(items: OrderItem[]): ShipmentResult {
+// presetConfig sets the pallet width, height and weight limits; it defaults to the
+// Standard rules. preset is recorded on the result so a saved plan reloads with it.
+// Container payload caps (CONTAINERS) are the same under every preset.
+export function computeShipment(
+  items: OrderItem[],
+  presetConfig: PresetConfig = PRESET_CONFIGS[DEFAULT_PRESET],
+  preset: RulePreset = DEFAULT_PRESET,
+): ShipmentResult {
+  const cfg = presetConfig;
   // Pallets start unstacked; stacking is used only if the floor needs it
-  const built = buildPalletPlans(items);
+  const built = buildPalletPlans(items, cfg);
   let pallets = built;
   const warnings: string[] = [];
   const totalCBM = pallets.reduce((sum, p) => sum + p.cbm, 0);
@@ -656,7 +678,7 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
 
   pallets.forEach((p) => {
     // Motor-only pallets have a motor family (SM-…) at the bottom
-    const maxHeightMm = p.family.startsWith('SM-') ? MAX_MOTOR_TOTAL_HEIGHT_MM : MAX_PUMP_TOTAL_HEIGHT_MM;
+    const maxHeightMm = p.family.startsWith('SM-') ? cfg.maxMotorTotalHeightMm : cfg.maxPumpTotalHeightMm;
     if (p.heightMm > maxHeightMm) {
       warnings.push(`${p.palletId}: height ${p.heightMm}mm exceeds max pallet height ${maxHeightMm}mm`);
     }
@@ -668,7 +690,7 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
     if (p.lengthMm > MAX_PUMP_PALLET_LENGTH_MM) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds practical pallet limit (${MAX_PUMP_PALLET_LENGTH_MM}mm) — verify floor-plan with Mahendra`);
     }
-    if (p.totalGrossKg > MAX_PALLET_GROSS_KG) {
+    if (p.totalGrossKg > cfg.maxPalletGrossKg) {
       warnings.push(`${p.palletId}: gross weight ${p.totalGrossKg}kg — verify forklift capacity`);
     }
   });
@@ -764,5 +786,6 @@ export function computeShipment(items: OrderItem[]): ShipmentResult {
     ...(containersNeeded !== undefined && { containersNeeded }),
     ...(containerLoads !== undefined && { containerLoads }),
     warnings,
+    preset,
   };
 }

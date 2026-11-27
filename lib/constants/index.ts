@@ -1,3 +1,5 @@
+import type { PresetConfig, RulePreset } from '@/lib/types';
+
 // Container specs
 export const CONTAINERS = {
   FCL_20FT: { maxCBM: 33.2, maxPayloadKg: 23000, tareKg: 2200 },
@@ -64,3 +66,56 @@ export const MAX_PUMP_PALLET_LENGTH_MM = 3700;
 // Below this total gross weight (kg) LCL is suggested instead of a full container:
 // a load that fits a 20ft is recommended as LCL, a 40ft load gets a note
 export const LCL_SUGGEST_BELOW_KG = 10000;
+
+// ─── Rule presets ────────────────────────────────────────────────────────────
+// Pallet-level limits only. The container payload caps in CONTAINERS
+// (20ft: 23,000 kg, 40ft: 28,000 kg) apply under every preset and are never relaxed.
+export const PRESET_CONFIGS: Record<RulePreset, PresetConfig> = {
+  // The standardised rules above (Kiran sir, 19 Nov 2026)
+  standard: {
+    pumpPalletWidthMm: PUMP_PALLET_WIDTH_MM,
+    motorPalletWidthMm: MOTOR_PALLET_WIDTH_MM,
+    maxPumpTotalHeightMm: MAX_PUMP_TOTAL_HEIGHT_MM,
+    maxMotorTotalHeightMm: MAX_MOTOR_TOTAL_HEIGHT_MM,
+    maxPalletGrossKg: MAX_PALLET_GROSS_KG,
+    allowCrossFamily: false,
+  },
+  relaxed: {
+    pumpPalletWidthMm: 1030,
+    motorPalletWidthMm: 750,
+    maxPumpTotalHeightMm: 1500,
+    maxMotorTotalHeightMm: 1500,
+    maxPalletGrossKg: 2000,
+    allowCrossFamily: false,
+  },
+  // Factory-style packing
+  freepack: {
+    pumpPalletWidthMm: 1110,
+    motorPalletWidthMm: 1110,
+    maxPumpTotalHeightMm: 1770,
+    maxMotorTotalHeightMm: 1770,
+    maxPalletGrossKg: 2000,
+    allowCrossFamily: true,
+  },
+};
+
+export const DEFAULT_PRESET: RulePreset = 'standard';
+
+export const RULE_PRESETS: RulePreset[] = ['standard', 'relaxed', 'freepack'];
+
+export const PRESET_LABELS: Record<RulePreset, string> = {
+  standard: 'Standard',
+  relaxed: 'Relaxed',
+  freepack: 'Freepack',
+};
+
+// One line on what each preset changes compared with Standard
+export const PRESET_SUMMARIES: Record<RulePreset, string> = {
+  standard: 'Pump 1,030mm · Motor 750mm wide · Height 1,050 / 1,080mm · Max pallet weight 1,500kg',
+  relaxed: 'Height cap raised to 1,500mm · Max pallet weight 2,000kg',
+  freepack: 'Factory-style · 1,110mm wide · 1,770mm height · mixed families allowed',
+};
+
+export function isRulePreset(value: unknown): value is RulePreset {
+  return typeof value === 'string' && (RULE_PRESETS as string[]).includes(value);
+}

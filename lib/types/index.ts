@@ -93,4 +93,28 @@ export interface ShipmentResult {
   warnings: string[];
   containersNeeded?: number;
   containerLoads?: ContainerLoad[];  // only for MULTI_CONTAINER; the first is the drawn floor plan
+  preset?: RulePreset;               // rules the plan was packed with; absent on older saved results (standard)
+  manualLayout?: boolean;            // placed holds positions moved by hand in the floor plan editor
 }
+
+// ─── Rule presets ────────────────────────────────────────────────────────────
+// Pallet-level limits the engine packs to. Container payload caps never change.
+export type RulePreset = 'standard' | 'relaxed' | 'freepack';
+
+export interface PresetConfig {
+  pumpPalletWidthMm: number;
+  motorPalletWidthMm: number;
+  maxPumpTotalHeightMm: number;
+  maxMotorTotalHeightMm: number;
+  maxPalletGrossKg: number;
+  allowCrossFamily: boolean;   // if true, pumps and motors can share a pallet
+}
+
+// A pallet's floor position set by hand in the floor plan editor: mm from the
+// container's front-left corner (x along the length, y across the width)
+export interface FloorPosition {
+  x: number;
+  y: number;
+}
+
+export type PalletPositions = Record<string, FloorPosition>;

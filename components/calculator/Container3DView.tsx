@@ -1,10 +1,10 @@
 'use client';
 
 import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { CONTAINERS, footprintLength, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
+import { applyPositions, CONTAINERS, footprintLength, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
 import { PALLET_BASE_HEIGHT_MM } from '@/lib/constants';
 import { familyColorMap } from '@/lib/familyColors';
-import { PalletLayer, PalletPlan, ShipmentResult } from '@/lib/types';
+import { PalletLayer, PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
 import {
   loadThree, Mesh, Object3D, OrbitControls, PerspectiveCamera, Raycaster, Scene, ThreeLib, Vector3, WebGLRenderer,
 } from '@/lib/loadThree';
@@ -13,6 +13,9 @@ interface Props {
   pallets: PalletPlan[];
   recommendation: ShipmentResult['containerRecommendation'];
   placed?: PlacedPallet[];
+  // Hand-set floor positions from the floor plan editor (mm from the front-left
+  // corner, keyed by a footprint's floor pallet); used over the auto layout
+  palletPositions?: PalletPositions;
   // False while another tab is showing: the render loop is paused
   active: boolean;
 }
@@ -151,11 +154,13 @@ function palletBoxes(pallet: PalletPlan, x: number, z: number, floorMm: number) 
   return parts;
 }
 
-export default function Container3DView({ pallets, recommendation, placed: savedPlaced, active }: Props) {
+export default function Container3DView({ pallets, recommendation, placed: savedPlaced, palletPositions, active }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hovered = useRef<{ id: string; meshes: Mesh[] } | null>(null);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+  // What the camera was last framed for: moving pallets keeps the user's view
+  const framedFor = useRef<{ stage: Stage; pallets: PalletPlan[]; length: number } | null>(null);
 
   const [three, setThree] = useState<ThreeLib | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
@@ -174,8 +179,11 @@ export default function Container3DView({ pallets, recommendation, placed: saved
   const container = CONTAINERS[containerKey];
 
   const placed = useMemo(
-    () => (isLcl ? null : savedPlaced) ?? packPallets(pallets, container.LENGTH),
-    [isLcl, savedPlaced, pallets, container.LENGTH],
+    () => {
+      const auto = (isLcl ? null : savedPlaced) ?? packPallets(pallets, container.LENGTH);
+      return isLcl ? auto : applyPositions(auto, palletPositions, container.LENGTH);
+    },
+    [isLcl, savedPlaced, pallets, container.LENGTH, palletPositions],
   );
 
   const familyColors = useMemo(() => familyColorMap(pallets), [pallets]);
@@ -324,21 +332,28 @@ export default function Container3DView({ pallets, recommendation, placed: saved
     stage.solids = solids;
     stage.bounds = { l: extentL, h: H, w: W };
 
-    // Opening view: above and to the front-right, far enough to frame everything
+    // Opening view: above and to the front-right, far enough to frame everything.
+    // Only for a new result or container: a pallet moved in the floor plan editor
+    // rebuilds the scene but leaves the camera where the user put it.
+    const last = framedFor.current;
+    const reframe = !last || last.stage !== stage || last.pallets !== pallets || last.length !== L;
+    framedFor.current = { stage, pallets, length: L };
     const dir = { x: 0.5, y: 0.42, z: 0.757 }; // unit length
     const distance = FRAME_MARGIN * fitDistance({ l: extentL, h: H, w: W }, dir, camera.aspect);
     const radius = Math.hypot(extentL, H, W) / 2;
-    controls.target.set(extentL / 2, H / 2, W / 2);
-    camera.position.set(
-      controls.target.x + dir.x * distance,
-      controls.target.y + dir.y * distance,
-      controls.target.z + dir.z * distance,
-    );
-    controls.minDistance = 1500;
-    controls.maxDistance = distance * 2.5;
-    camera.far = controls.maxDistance + radius * 2;
-    camera.updateProjectionMatrix();
-    controls.update();
+    if (reframe) {
+      controls.target.set(extentL / 2, H / 2, W / 2);
+      camera.position.set(
+        controls.target.x + dir.x * distance,
+        controls.target.y + dir.y * distance,
+        controls.target.z + dir.z * distance,
+      );
+      controls.minDistance = 1500;
+      controls.maxDistance = distance * 2.5;
+      camera.far = controls.maxDistance + radius * 2;
+      camera.updateProjectionMatrix();
+      controls.update();
+    }
     stage.safePosition = null;
     stage.safeTarget = null;
 
@@ -350,7 +365,7 @@ export default function Container3DView({ pallets, recommendation, placed: saved
       stage.solids = [];
       disposables.forEach(d => d.dispose());
     };
-  }, [stage, placed, familyColors, container]);
+  }, [stage, placed, pallets, familyColors, container]);
 
   // Render loop: runs only while this tab is showing
   useEffect(() => {
