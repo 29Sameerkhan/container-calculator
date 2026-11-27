@@ -410,7 +410,7 @@ function DashboardInner() {
     const layout = floorLayout(result.pallets, result.containerRecommendation, result.placed);
     if (!layout) return [];
     const placedNow = applyPositions(layout.placed, positions, layout.containerLength);
-    return validateLayout(placedNow, layout.containerLength, maxPalletGrossKg).filter(i => i.severity === 'error');
+    return validateLayout(placedNow, layout.containerLength, maxPalletGrossKg, positions).filter(i => i.severity === 'error');
   }, [result, positions, maxPalletGrossKg]);
   const saveBlockedReason = layoutErrors.length > 0
     ? `Fix ${layoutErrors.length} floor plan error${layoutErrors.length > 1 ? 's' : ''} before saving: ${layoutErrors[0].message}`

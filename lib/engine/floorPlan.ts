@@ -269,9 +269,15 @@ export function applyPositions(
   containerLength: number,
 ): PlacedPallet[] {
   if (!positions || Object.keys(positions).length === 0) return placed;
-  // Stacks made by hand first: the top pallet's footprint joins its bottom's.
+  // A stack's top pallet with an entry of its own has been taken off: it becomes
+  // a footprint of its own (same orientation), placed by its entry below
+  let units = placed.flatMap(u => {
+    const top = u.stackedPallet;
+    if (!top || !positions[top.palletId]) return [u];
+    return [{ ...u, stackedPallet: undefined }, { pallet: top, x: u.x, y: u.y, rotated: u.rotated, overflow: false }];
+  });
+  // Stacks made by hand next: the top pallet's footprint joins its bottom's.
   // An entry that no longer matches two single pallets is ignored.
-  let units = placed;
   for (const [topId, pos] of Object.entries(positions)) {
     if (!pos.stackedOn) continue;
     const top = units.find(u => u.pallet.palletId === topId && !u.stackedPallet);
@@ -299,6 +305,38 @@ export function outsideByMm(p: PlacedPallet, containerLength: number): number {
     p.x + len - containerLength,
     p.y + footprintWidth(p) - CONTAINER_INNER_WIDTH_MM,
   );
+}
+
+// The free spot on the container floor nearest `near` for a footprint this
+// long and wide (along × across), flush against walls or other footprints, or
+// null when none is free
+export function findFreeSpot(
+  others: PlacedPallet[],
+  lengthMm: number,
+  widthMm: number,
+  near: { x: number; y: number },
+  containerLength: number,
+): { x: number; y: number } | null {
+  const xs = new Set([0, containerLength - lengthMm, near.x]);
+  const ys = new Set([0, CONTAINER_INNER_WIDTH_MM - widthMm, near.y]);
+  for (const o of others) {
+    xs.add(o.x + footprintLength(o)); xs.add(o.x - lengthMm); xs.add(o.x);
+    ys.add(o.y + footprintWidth(o)); ys.add(o.y - widthMm); ys.add(o.y);
+  }
+  let best: { x: number; y: number; d: number } | null = null;
+  for (const x of Array.from(xs)) {
+    if (x < 0 || x + lengthMm > containerLength) continue;
+    for (const y of Array.from(ys)) {
+      if (y < 0 || y + widthMm > CONTAINER_INNER_WIDTH_MM) continue;
+      const blocked = others.some(o =>
+        x + lengthMm - TOUCH_TOLERANCE_MM > o.x && o.x + footprintLength(o) - TOUCH_TOLERANCE_MM > x &&
+        y + widthMm - TOUCH_TOLERANCE_MM > o.y && o.y + footprintWidth(o) - TOUCH_TOLERANCE_MM > y);
+      if (blocked) continue;
+      const d = Math.hypot(x - near.x, y - near.y);
+      if (!best || d < best.d) best = { x, y, d };
+    }
+  }
+  return best && { x: best.x, y: best.y };
 }
 
 export function overlaps(a: PlacedPallet, b: PlacedPallet): boolean {
@@ -341,6 +379,8 @@ export function validateLayout(
   placed: PlacedPallet[],
   containerLength: number,
   maxPalletGrossKg: number,
+  // Hand-set positions: a pallet unstacked with no free space (unstacked) only warns
+  positions?: PalletPositions,
 ): LayoutIssue[] {
   const issues: LayoutIssue[] = [];
   for (let i = 0; i < placed.length; i++) {
@@ -363,11 +403,16 @@ export function validateLayout(
   for (const p of placed) {
     const out = Math.round(outsideByMm(p, containerLength));
     if (out > 0) {
+      // Taken off a stack with no free space: a warning to verify, not a block
+      const unstacked = positions?.[p.pallet.palletId]?.unstacked === true;
       issues.push({
         kind: 'outside',
-        severity: 'error',
+        severity: unstacked ? 'warning' : 'error',
         palletIds: [p.pallet.palletId],
-        message: `[${footprintLabel(p)}] extends ${out.toLocaleString('en-US')}mm outside the container floor.`,
+        message: unstacked
+          ? `[${footprintLabel(p)}] Unstacking this pair means the load may not fit — verify with Mahendra. ` +
+            `No free floor space was left; it is placed ${out.toLocaleString('en-US')}mm past the container floor.`
+          : `[${footprintLabel(p)}] extends ${out.toLocaleString('en-US')}mm outside the container floor.`,
       });
     }
   }
