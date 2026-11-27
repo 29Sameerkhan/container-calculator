@@ -150,11 +150,12 @@ export default function HistoryPage() {
 
         {!loading && rows.length > 0 && (
           <div className="bg-white rounded-2xl border border-blue-100 shadow-sm overflow-hidden">
-            {/* Scrolls sideways when the table is wider than the page; the Actions
-                column stays pinned to the right edge so it is never out of view */}
-            <div className="overflow-x-auto">
+            {/* Scrolls inside a box at most 70% of the screen tall, so its sideways
+                scrollbar is always on screen (not below the last row). The header
+                row stays pinned at the top, the Actions column at the right edge. */}
+            <div className="overflow-auto max-h-[70vh]">
               <table className="w-full text-sm">
-                <thead>
+                <thead className="sticky top-0 z-20">
                   <tr
                     className="text-xs text-gray-500 uppercase tracking-wide border-b border-blue-100"
                     style={{ background: 'linear-gradient(90deg, #f0f4ff, #f8faff)' }}
