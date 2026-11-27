@@ -1,11 +1,11 @@
 'use client';
 
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { X } from 'lucide-react';
 import OrderItemForm, { isComplete, codeWarning } from '@/components/calculator/OrderItemForm';
-import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
 import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import { OrderItem, PalletPositions, RulePreset, ShipmentOrder, ShipmentResult } from '@/lib/types';
@@ -14,7 +14,9 @@ import { DEFAULT_PRESET, isRulePreset, PRESET_CONFIGS } from '@/lib/constants';
 import { applyPositions, floorLayout, validateLayout } from '@/lib/engine/floorPlan';
 import ShareLinkButton from '@/components/calculator/ShareLinkButton';
 import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
-import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
+import { PdfCompanyHeader, PdfCoverDetails, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
+import PdfPresetSections from '@/components/calculator/PdfPresetSections';
+import { fetchAllPresetResults, PresetResults } from '@/lib/presetResults';
 
 // One order card on the dashboard. `items` are the rows its form starts with
 // (empty for a new order, or loaded from a saved calculation); live edits are
@@ -134,6 +136,8 @@ function DashboardInner() {
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'done' | 'error'>('idle');
   // The results block the PDF is captured from
   const planRef = useRef<HTMLDivElement>(null);
+  // The plan under all three presets, drawn into the PDF only while it is captured
+  const [pdfResults, setPdfResults] = useState<PresetResults | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   // Orders the current result was calculated from — what Save stores
   const [calculatedOrders, setCalculatedOrders] = useState<ShipmentOrder[]>([]);
@@ -376,6 +380,10 @@ function DashboardInner() {
     }
     setPdfStatus('exporting');
     try {
+      // The PDF holds the plan under every preset, whichever one is selected here;
+      // the current preset's section keeps any floor moves
+      const all = await fetchAllPresetResults(calculatedOrders, withLayout(result, positions));
+      flushSync(() => setPdfResults(all));
       await exportPlanPdf(planRef.current, planPdfFilename(id, displayName), id ? await planShareUrlForPdf(id) : undefined);
       setPdfStatus('done');
       // Clear the form for the next calculation once the confirmation has been seen
@@ -383,6 +391,8 @@ function DashboardInner() {
     } catch (e) {
       console.error(e);
       setPdfStatus('error');
+    } finally {
+      setPdfResults(null);
     }
   }
 
@@ -528,10 +538,9 @@ function DashboardInner() {
           + Add Another Order
         </button>
 
-        {/* Packing rules: applies to the next calculation, and re-runs the current one */}
-        {(totalLines > 0 || result) && (
-          <PresetSelector value={preset} onChange={p => { void handlePresetChange(p); }} busy={presetBusy} />
-        )}
+        {/* Packing rules, always above Calculate: they apply to the next calculation
+            and re-run the current one when changed */}
+        <PresetSelector value={preset} onChange={p => { void handlePresetChange(p); }} busy={presetBusy} />
 
         {/* Calculate button */}
         {(totalLines > 0 || error) && (
@@ -573,17 +582,27 @@ function DashboardInner() {
               planId={savedId}
               date={new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}
             />
-            <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
-            <PdfOrderLines orders={calculatedOrders} />
-            <ContainerViewTabs
-              pallets={result.pallets}
-              recommendation={result.containerRecommendation}
-              placed={result.placed}
-              positions={positions}
-              onPositionsChange={handlePositionsChange}
-              maxPalletGrossKg={maxPalletGrossKg}
+            <PdfCoverDetails
+              customerName={displayName}
+              orderRef={displayRef}
+              date={new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}
             />
-            <PalletPlanTable pallets={result.pallets} />
+            {/* On screen: the selected preset. The PDF has its own section per preset. */}
+            <div data-pdf-hide className="space-y-4">
+              <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
+            </div>
+            <PdfOrderLines orders={calculatedOrders} />
+            <div data-pdf-hide>
+              <ContainerViewTabs
+                pallets={result.pallets}
+                recommendation={result.containerRecommendation}
+                placed={result.placed}
+                positions={positions}
+                onPositionsChange={handlePositionsChange}
+                maxPalletGrossKg={maxPalletGrossKg}
+              />
+            </div>
+            <PdfPresetSections results={pdfResults} />
           </div>
         )}
 

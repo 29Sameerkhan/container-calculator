@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import ContainerSummaryCard from '@/components/calculator/ContainerSummaryCard';
@@ -11,6 +12,8 @@ import ShareLinkButton from '@/components/calculator/ShareLinkButton';
 import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
 import { OrderItem, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import { PdfCompanyHeader, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
+import PdfPresetSections from '@/components/calculator/PdfPresetSections';
+import { fetchAllPresetResults, PresetResults } from '@/lib/presetResults';
 
 interface SavedCalculation {
   id: number;
@@ -51,16 +54,24 @@ function CalculationDetail() {
   // The order details, summary, floor plan and pallet table the PDF is captured from
   const planRef = useRef<HTMLDivElement>(null);
   const exported = useRef(false);
+  // The plan under all three presets, drawn into the PDF only while it is captured
+  const [pdfResults, setPdfResults] = useState<PresetResults | null>(null);
 
   async function handleExport() {
     if (!calc || !planRef.current) return;
     setPdfStatus('exporting');
     try {
+      // Every preset, re-run server-side on the saved order lines; the saved
+      // result stands in for its own preset (keeping any hand-moved layout)
+      const all = await fetchAllPresetResults(savedOrders(calc), calc.result);
+      flushSync(() => setPdfResults(all));
       await exportPlanPdf(planRef.current, planPdfFilename(calc.id, calc.customerName), await planShareUrlForPdf(calc.id));
       setPdfStatus('idle');
     } catch (e) {
       console.error(e);
       setPdfStatus('error');
+    } finally {
+      setPdfResults(null);
     }
   }
 
@@ -182,20 +193,26 @@ function CalculationDetail() {
               </div>
             </div>
 
-            <ContainerSummaryCard
-              result={calc.result}
-              customerName={isConsolidated ? '' : calc.customerName}
-              orderRef={isConsolidated ? '' : calc.orderRef}
-            />
+            {/* On screen: the saved plan. The PDF has its own section per preset. */}
+            <div data-pdf-hide>
+              <ContainerSummaryCard
+                result={calc.result}
+                customerName={isConsolidated ? '' : calc.customerName}
+                orderRef={isConsolidated ? '' : calc.orderRef}
+              />
+            </div>
             <PdfOrderLines orders={savedOrders(calc)} />
-            {/* Drawn from the positions saved with the result, so it matches what
-                was shown at calculation time */}
-            <ContainerViewTabs
-              pallets={calc.result.pallets}
-              recommendation={calc.result.containerRecommendation}
-              placed={calc.result.placed}
-            />
-            <PalletPlanTable pallets={calc.result.pallets} />
+            {/* Drawn from the positions saved with the result (hand-moved ones
+                included), read-only, so it matches what was saved */}
+            <div data-pdf-hide className="space-y-6">
+              <ContainerViewTabs
+                pallets={calc.result.pallets}
+                recommendation={calc.result.containerRecommendation}
+                placed={calc.result.placed}
+              />
+              <PalletPlanTable pallets={calc.result.pallets} />
+            </div>
+            <PdfPresetSections results={pdfResults} />
           </div>
         )}
       </div>

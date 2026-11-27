@@ -40,6 +40,22 @@ export function PdfCompanyHeader({ planId, date }: { planId: number | null; date
   );
 }
 
+// Cover details under the company header: who and what the plan is for
+export function PdfCoverDetails({ customerName, orderRef, date }: { customerName: string; orderRef: string; date: string }) {
+  return (
+    <PdfOnly>
+      <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6 grid grid-cols-3 gap-4">
+        {[['Customer', customerName], ['Order Ref', orderRef], ['Date', date]].map(([label, value]) => (
+          <div key={label}>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</p>
+            <p className="text-sm font-semibold text-gray-900 mt-1">{value || '—'}</p>
+          </div>
+        ))}
+      </div>
+    </PdfOnly>
+  );
+}
+
 export function PdfOrderLines({ orders }: { orders: ShipmentOrder[] }) {
   return (
     <PdfOnly>

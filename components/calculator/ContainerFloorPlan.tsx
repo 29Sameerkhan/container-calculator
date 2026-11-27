@@ -334,16 +334,6 @@ export default function ContainerFloorPlan({
               ⚠ {overflowCount} pallet{overflowCount > 1 ? 's' : ''} overflow
             </span>
           )}
-          {editable && (
-            <button
-              data-pdf-hide
-              onClick={() => onPositionsChange?.({})}
-              disabled={!isMoved}
-              className="text-xs font-medium text-blue-700 border border-blue-200 hover:bg-blue-50 disabled:text-gray-400 disabled:border-gray-200 disabled:hover:bg-white rounded-lg px-3 py-1.5 transition-colors"
-            >
-              ↺ Reset to auto layout
-            </button>
-          )}
           <div data-pdf-hide className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
             {(['top', 'side'] as const).map(v => (
               <button
@@ -372,12 +362,28 @@ export default function ContainerFloorPlan({
             Overflow
           </span>
         )}
-        {editable && view === 'top' && (
-          <span data-pdf-hide className="text-xs text-gray-400 ml-auto">
-            Drag a pallet to move it · Arrow keys nudge the selected pallet (Shift ×10)
-          </span>
-        )}
       </div>
+
+      {/* Editor instructions and reset, above the drawing */}
+      {editable && (
+        <div data-pdf-hide className="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5">
+          <div>
+            <p className="text-sm font-semibold text-blue-900">Drag pallets to reposition · Errors shown below</p>
+            <p className="text-xs text-blue-700 mt-0.5">
+              {view === 'top'
+                ? 'Click a pallet to select it; arrow keys nudge it 10 mm (Shift: 100 mm).'
+                : 'Switch to the Top view to move pallets.'}
+            </p>
+          </div>
+          <button
+            onClick={() => onPositionsChange?.({})}
+            disabled={!isMoved}
+            className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed rounded-lg px-4 py-2 transition-colors"
+          >
+            ↺ Reset to auto layout
+          </button>
+        </div>
+      )}
 
       {/* SVG */}
       <div className="overflow-x-auto">

@@ -29,8 +29,8 @@ export default function PresetSelector({ value, onChange, busy = false }: Props)
   return (
     <div data-pdf-hide className="bg-white rounded-2xl shadow-sm border border-blue-100 px-6 py-4">
       <div className="flex items-center gap-4 flex-wrap">
-        <span id="preset-label" className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-          Packing rules
+        <span id="preset-label" className="text-sm font-semibold text-gray-700">
+          Packing Rules:
         </span>
         <div
           role="radiogroup"

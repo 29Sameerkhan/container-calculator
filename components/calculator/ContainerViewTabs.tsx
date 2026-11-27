@@ -1,11 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { useState } from 'react';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
 import Container3DView from '@/components/calculator/Container3DView';
 import PdfSideView from '@/components/calculator/PdfSideView';
-import { applyPositions, floorLayout } from '@/lib/engine/floorPlan';
+import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 import { PalletPlan, PalletPositions, PlacedPallet, ShipmentResult } from '@/lib/types';
 
 type Tab = 'plan' | '3d';
@@ -20,8 +19,8 @@ interface Props {
   recommendation: ShipmentResult['containerRecommendation'];
   placed?: PlacedPallet[];
   initialTab?: Tab;
-  // Editor mode (dashboard): the floor plan is a collapsible editor above an
-  // always-visible 3D view, and both draw the hand-set positions
+  // Editor mode (calculator): Floor Plan / 3D View / Pallet Table tabs; the floor
+  // plan is draggable and both views draw the hand-set positions
   positions?: PalletPositions;
   onPositionsChange?: (positions: PalletPositions) => void;
   maxPalletGrossKg?: number;
@@ -75,60 +74,70 @@ function ReadOnlyTabs({ initialTab = 'plan', pallets, recommendation, placed }: 
   );
 }
 
-// Dashboard: drag pallets in the 2D floor plan and watch the 3D view follow
+type EditorTab = 'plan' | '3d' | 'table';
+
+const EDITOR_TABS: Array<{ id: EditorTab; label: string }> = [
+  { id: 'plan', label: 'Floor Plan' },
+  { id: '3d', label: '3D View' },
+  { id: 'table', label: 'Pallet Table' },
+];
+
+// Calculator results: Floor Plan (the drag-and-drop editor, shown first), 3D View
+// (follows the moves) and Pallet Table. Panels stay mounted once opened, so the
+// 3D camera and the floor plan's Top/Side choice survive switching tabs.
 function EditorLayout({ pallets, recommendation, placed, positions, onPositionsChange, maxPalletGrossKg }: Props) {
-  const [planOpen, setPlanOpen] = useState(true);
-  const isLcl = recommendation === 'LCL';
-  // The PDF side view draws the floor as it stands, moves included
-  const placedNow = useMemo(() => {
-    const layout = floorLayout(pallets, recommendation, placed);
-    return layout ? applyPositions(layout.placed, positions, layout.containerLength) : placed;
-  }, [pallets, recommendation, placed, positions]);
+  const [tab, setTab] = useState<EditorTab>('plan');
+  // The 3D scene isn't created until its tab is first opened
+  const [opened3d, setOpened3d] = useState(false);
 
   return (
-    <div className="space-y-4">
-      <section>
-        <button
-          data-pdf-hide
-          onClick={() => setPlanOpen(o => !o)}
-          aria-expanded={planOpen}
-          aria-controls="floor-plan-editor"
-          className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-600 hover:text-gray-900"
-        >
-          <ChevronDown size={14} className={`transition-transform ${planOpen ? '' : '-rotate-90'}`} />
-          2D Floor Plan Editor
-          {!isLcl && positions && Object.keys(positions).length > 0 && (
-            <span className="ml-1 normal-case font-medium text-blue-700">· edited</span>
-          )}
-        </button>
-        {/* Collapsed on screen, still captured by the PDF export */}
-        <div
-          id="floor-plan-editor"
-          data-pdf-keep
-          className={planOpen ? undefined : 'hidden'}
-          data-pdf-only={planOpen ? undefined : true}
-        >
-          <ContainerFloorPlan
-            pallets={pallets}
-            recommendation={recommendation}
-            placed={placed}
-            positions={positions}
-            onPositionsChange={onPositionsChange}
-            maxPalletGrossKg={maxPalletGrossKg}
-          />
-        </div>
-      </section>
+    <div>
+      <div role="tablist" aria-label="Result views" className="mb-3 inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium bg-white">
+        {EDITOR_TABS.map(({ id, label }, i) => (
+          <button
+            key={id}
+            id={`result-tab-${id}`}
+            role="tab"
+            aria-selected={tab === id}
+            aria-controls={`result-panel-${id}`}
+            onClick={() => {
+              setTab(id);
+              if (id === '3d') setOpened3d(true);
+            }}
+            className={`px-5 py-2 transition-colors ${i > 0 ? 'border-l border-gray-200' : ''} ${
+              tab === id ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      <PdfSideView pallets={pallets} recommendation={recommendation} placed={placedNow} />
-
-      <div data-pdf-hide>
-        <Container3DView
+      <div id="result-panel-plan" role="tabpanel" aria-labelledby="result-tab-plan" className={tab === 'plan' ? undefined : 'hidden'}>
+        <ContainerFloorPlan
           pallets={pallets}
           recommendation={recommendation}
           placed={placed}
-          palletPositions={positions}
-          active
+          positions={positions}
+          onPositionsChange={onPositionsChange}
+          maxPalletGrossKg={maxPalletGrossKg}
         />
+      </div>
+
+      {opened3d && (
+        <div id="result-panel-3d" role="tabpanel" aria-labelledby="result-tab-3d" className={tab === '3d' ? undefined : 'hidden'}>
+          <Container3DView
+            pallets={pallets}
+            recommendation={recommendation}
+            placed={placed}
+            palletPositions={positions}
+            active={tab === '3d'}
+          />
+        </div>
+      )}
+
+      <div id="result-panel-table" role="tabpanel" aria-labelledby="result-tab-table" className={tab === 'table' ? undefined : 'hidden'}>
+        <PalletPlanTable pallets={pallets} />
       </div>
     </div>
   );
