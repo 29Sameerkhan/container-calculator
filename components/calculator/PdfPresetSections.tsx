@@ -4,6 +4,7 @@ import { PresetResults } from '@/lib/presetResults';
 import { PRESET_LABELS, PRESET_SUMMARIES, RULE_PRESETS } from '@/lib/constants';
 import { ShipmentResult } from '@/lib/types';
 import ContainerFloorPlan from '@/components/calculator/ContainerFloorPlan';
+import { palletCountLabel } from '@/lib/format';
 import PdfSideView from '@/components/calculator/PdfSideView';
 import PalletPlanTable from '@/components/calculator/PalletPlanTable';
 
@@ -55,7 +56,10 @@ export default function PdfPresetSections({ results }: { results: PresetResults 
                 <span className={`rounded-lg border-2 px-4 py-2 text-lg font-bold ${badge.className}`}>{label}</span>
               </div>
               <div className="grid grid-cols-4 gap-4 pt-4 border-t border-gray-100">
-                <Stat label="Total Pallets" value={String(r.pallets.length)} />
+                <Stat
+                  label={r.pallets.some(p => p.kind === 'crate') ? 'Pallets + Crates' : 'Total Pallets'}
+                  value={r.pallets.some(p => p.kind === 'crate') ? palletCountLabel(r.pallets) : String(r.pallets.length)}
+                />
                 <Stat label="Net Weight" value={kg(netKg)} />
                 <Stat label="Gross Weight" value={kg(r.totalGrossKg)} />
                 <Stat label="Wood Weight" value={kg(woodKg)} />

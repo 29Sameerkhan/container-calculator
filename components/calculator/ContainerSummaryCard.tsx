@@ -2,6 +2,7 @@
 
 import { ShipmentResult } from '@/lib/types';
 import { CONTAINERS, LCL_SUGGEST_BELOW_KG, PRESET_LABELS } from '@/lib/constants';
+import { palletCountLabel } from '@/lib/format';
 
 interface Props {
   result: ShipmentResult;
@@ -78,7 +79,9 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
       <div className="mt-4 grid grid-cols-3 gap-4 pt-4 border-t border-current/10">
         <div>
           <p className="text-xs text-gray-500">Total Pallets</p>
-          <p className="text-lg font-semibold text-gray-800">{result.pallets.length}</p>
+          <p className="text-lg font-semibold text-gray-800">
+            {result.pallets.some(p => p.kind === 'crate') ? palletCountLabel(result.pallets) : result.pallets.length}
+          </p>
         </div>
         <div>
           <p className="text-xs text-gray-500">Net Weight</p>

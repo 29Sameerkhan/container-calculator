@@ -8,3 +8,12 @@ export function formatSavedAt(createdAt: string): string {
     timeZone: 'Asia/Kolkata',
   });
 }
+
+
+// "13 pallets", or "13 pallets + 3 crates" when some units are crates
+export function palletCountLabel(pallets: Array<{ kind?: 'crate' }>): string {
+  const crates = pallets.filter(p => p.kind === 'crate').length;
+  const onPallets = pallets.length - crates;
+  const palletPart = `${onPallets} pallet${onPallets === 1 ? '' : 's'}`;
+  return crates > 0 ? `${palletPart} + ${crates} crate${crates === 1 ? '' : 's'}` : palletPart;
+}

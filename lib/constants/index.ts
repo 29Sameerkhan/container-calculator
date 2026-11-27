@@ -29,6 +29,14 @@ export const MOTOR_PALLET_WIDTH_MM = 750;
 // Standardised per Kiran sir, 19 Nov 2026
 export const MOTORS_PER_ROW = 3;
 
+// Wooden crates for loose motor boxes (Freepack V4 motors): one variant per
+// crate, up to this many boxes and this gross weight. Factory crate for 40 ×
+// SM-S-I-5.5-V4: 800mm H × 780mm × 1,180mm.
+export const CRATE_MAX_QTY = 40;
+export const CRATE_MAX_GROSS_KG = 1500;
+// Crate wall/base/lid allowance per side (mm) around the stacked boxes
+export const CRATE_WALL_MM = 45;
+
 // Wood weight constants (kg)
 export const WOOD_WEIGHT = {
   MOTOR_SINGLE_SKU: 20,
@@ -36,6 +44,7 @@ export const WOOD_WEIGHT = {
   PUMP_LIGHT: 25,
   PUMP_HEAVY: 30,  // SK77/SK95 family
   BOX_ACCESSORY: 10,
+  CRATE: 25,       // assumed — confirm with the factory
 };
 
 // Max pump pallet height (mm), total from floor: wood base + boxes (870mm of boxes).
@@ -80,6 +89,10 @@ export const PRESET_CONFIGS: Record<RulePreset, PresetConfig> = {
     maxPalletGrossKg: MAX_PALLET_GROSS_KG,
     maxPalletLengthMm: Infinity,   // current behaviour, no cap
     allowCrossFamily: false,
+    motorsPerRow: MOTORS_PER_ROW,
+    motorQtyPerPallet: Infinity,   // limited by height and weight only
+    v4MotorsInCrates: false,
+    rotatePalletsOnFloor: false,   // rows across the floor in length order, as before
   },
   relaxed: {
     pumpPalletWidthMm: 1030,
@@ -89,17 +102,26 @@ export const PRESET_CONFIGS: Record<RulePreset, PresetConfig> = {
     maxPalletGrossKg: 2000,
     maxPalletLengthMm: Infinity,   // relaxed changes height and weight only
     allowCrossFamily: false,
+    motorsPerRow: MOTORS_PER_ROW,
+    motorQtyPerPallet: Infinity,
+    v4MotorsInCrates: false,
+    rotatePalletsOnFloor: false,
   },
-  // Factory-style packing
+  // Factory-style packing, benchmarked on the factory's packing list for the
+  // Societe des Sources Vertes order (SK/SO/2026-2027/00143)
   freepack: {
     pumpPalletWidthMm: 1110,
-    motorPalletWidthMm: 1110,
-    maxPumpTotalHeightMm: 1770,
-    maxMotorTotalHeightMm: 1770,
-    maxPalletGrossKg: 2000,
+    motorPalletWidthMm: 725,       // factory uses 725mm for V6 motors
+    maxPumpTotalHeightMm: 1770,    // factory maximum observed
+    maxMotorTotalHeightMm: 1650,   // factory maximum observed (SK-09)
+    maxPalletGrossKg: 2000,        // factory maximum observed (SK-02 at 1,980kg)
     // Factory practice: the longest pump pallet is ~1,640mm; 160mm margin
     maxPalletLengthMm: 1800,
-    allowCrossFamily: true,
+    allowCrossFamily: true,        // pump families mix freely, rows shared
+    motorsPerRow: 3,               // factory kept 3 across for V6 motors
+    motorQtyPerPallet: 24,         // factory target: 3 across × 8 rows
+    v4MotorsInCrates: true,        // factory packed V4 solar motors in wooden crates
+    rotatePalletsOnFloor: true,    // pallets may be turned 90° on the floor for a tighter load
   },
 };
 
@@ -117,7 +139,7 @@ export const PRESET_LABELS: Record<RulePreset, string> = {
 export const PRESET_SUMMARIES: Record<RulePreset, string> = {
   standard: 'Pump 1,030mm · Motor 750mm wide · Height 1,050 / 1,080mm · Max pallet weight 1,500kg',
   relaxed: 'Height cap raised to 1,500mm · Max pallet weight 2,000kg',
-  freepack: 'Factory-style · 1,110mm wide · 1,770mm height · max 1,800mm long · mixed families allowed',
+  freepack: 'Factory-style · pumps 1,110mm wide, 1,770mm high, mixed families · V6 motors 725mm wide, 24 per pallet · V4 motors in crates',
 };
 
 export function isRulePreset(value: unknown): value is RulePreset {

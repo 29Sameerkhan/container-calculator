@@ -69,7 +69,8 @@ export default function PdfSideView({ pallets, recommendation, placed: savedPlac
                   return stack.map(({ pallet, baseMm, isTop }) => {
                     // Overflow pallets show as a sliver at the container end, as on the floor plan
                     const x = px(Math.min(p.x, container.LENGTH - 10));
-                    const w = p.overflow ? Math.max(4, cL - x) : px(pallet.lengthMm);
+                    // A pallet turned 90° shows its width along the container
+                    const w = p.overflow ? Math.max(4, cL - x) : px(p.rotated ? pallet.widthMm : pallet.lengthMm);
                     const h = px(pallet.heightMm);
                     const y = 1 + cH - px(baseMm) - h;
                     const color = p.overflow ? OVERFLOW_COLOR : (familyColors[pallet.family] ?? '#94a3b8');

@@ -17,10 +17,13 @@ import {
   MAX_STACKED_PAIR_KG,
   MAX_PUMP_PALLET_LENGTH_MM,
   LCL_SUGGEST_BELOW_KG,
+  CRATE_MAX_QTY,
+  CRATE_MAX_GROSS_KG,
+  CRATE_WALL_MM,
   PRESET_CONFIGS,
   DEFAULT_PRESET,
 } from '@/lib/constants';
-import { packPallets } from '@/lib/engine/floorPlan';
+import { packPallets, packPalletsTurning } from '@/lib/engine/floorPlan';
 import { normaliseProductCode } from '@/lib/engine/utils';
 
 // Container inner dimensions (mm)
@@ -79,14 +82,32 @@ export function computeMotorPalletGeometry(
 ): { lengthMm: number; widthMm: number; heightMm: number; motorsPerLayer: number; layers: number } {
   const palletWidthMm = resolvePalletWidth(item, cfg);
   // Always 3 motors across, whatever the box width (Kiran sir, 19 Nov 2026)
-  const motorsPerLayer = MOTORS_PER_ROW;
+  const motorsPerLayer = cfg.motorsPerRow;
+  const rowHeightMm = motorRowHeightMm(item, cfg);
   // Motor pallet height cap is total from floor, wood base included
-  const maxLayers = Math.floor((cfg.maxMotorTotalHeightMm - PALLET_BASE_HEIGHT_MM) / item.boxHeightMm);
+  const maxLayers = Math.floor((cfg.maxMotorTotalHeightMm - PALLET_BASE_HEIGHT_MM) / rowHeightMm);
   const layers = Math.max(1, Math.min(maxLayers, Math.ceil(qty / motorsPerLayer)));
   const columns = Math.ceil(qty / (motorsPerLayer * layers));
   const lengthMm = columns * item.boxLengthMm;
-  const heightMm = layers * item.boxHeightMm + PALLET_BASE_HEIGHT_MM;
+  const heightMm = layers * rowHeightMm + PALLET_BASE_HEIGHT_MM;
   return { lengthMm, widthMm: palletWidthMm, heightMm, motorsPerLayer, layers };
+}
+
+// Height of one row of motor boxes on a motor-only pallet. Boxes stand upright
+// (box height). A preset with a motors-per-pallet target lays them on their side
+// when only that reaches the target within the height cap and still fits the
+// row across the pallet: V6 boxes (178 × 229) on a 725mm Freepack pallet give
+// 3 across × 8 rows at 1,604mm, as the factory packs them.
+function motorRowHeightMm(item: OrderItem, cfg: PresetConfig): number {
+  if (!Number.isFinite(cfg.motorQtyPerPallet)) return item.boxHeightMm;
+  const rowsNeeded = Math.ceil(cfg.motorQtyPerPallet / cfg.motorsPerRow);
+  const widthMm = resolvePalletWidth(item, cfg);
+  const fits = (rowHeightMm: number, acrossMm: number) =>
+    cfg.motorsPerRow * acrossMm <= widthMm &&
+    rowsNeeded * rowHeightMm + PALLET_BASE_HEIGHT_MM <= cfg.maxMotorTotalHeightMm;
+  if (fits(item.boxHeightMm, item.boxWidthMm)) return item.boxHeightMm;
+  if (fits(item.boxWidthMm, item.boxHeightMm)) return item.boxWidthMm;
+  return item.boxHeightMm;
 }
 
 type PalletSku = { item: OrderItem; qty: number };
@@ -96,6 +117,8 @@ interface PalletDraft {
   skus: PalletSku[];  // bottom layer first
   widthMm: number;
   motorOnly: boolean;
+  sharedRows?: boolean;  // pump layers may share a part-filled row (Freepack fill)
+  crate?: boolean;       // a wooden crate of loose motor boxes
 }
 
 // Boxes side-by-side across a pallet of this width. Motors are always
@@ -107,18 +130,24 @@ function boxesAcrossFor(item: OrderItem, widthMm: number): number {
 
 // Per Kiran sir (19 Nov 2026): different motor variants may share a row. A motor
 // layer first fills the part-filled top row of the motor layer below it (up to
-// MOTORS_PER_ROW across), then starts new rows. Pump rows are never shared.
-function buildLayers(skus: PalletSku[], widthMm: number): PalletLayer[] {
+// MOTORS_PER_ROW across), then starts new rows. Pump rows are shared the same
+// way only on a pallet packed with sharePumpRows (Freepack's fill), and only
+// between boxes that sit the same number across.
+function buildLayers(skus: PalletSku[], widthMm: number, sharePumpRows = false): PalletLayer[] {
   let openSlots = 0;        // free places in the top row of the layer below
   let openRowHeightMm = 0;  // that row's height; 0 when it can't be shared
+  let openAcross = 0;       // boxes across that row
   return skus.map(({ item, qty }) => {
     const boxesAcross = boxesAcrossFor(item, widthMm);
-    const motor = isMotor(item);
-    const sharedRowQty = motor && item.boxHeightMm <= openRowHeightMm ? Math.min(openSlots, qty) : 0;
+    const shares = isMotor(item) || sharePumpRows;
+    const sharedRowQty = shares && item.boxHeightMm <= openRowHeightMm && boxesAcross === openAcross
+      ? Math.min(openSlots, qty)
+      : 0;
     const rows = Math.ceil((qty - sharedRowQty) / boxesAcross);
     if (rows > 0) {
-      openSlots = motor ? rows * boxesAcross - (qty - sharedRowQty) : 0;
-      openRowHeightMm = motor ? item.boxHeightMm : 0;
+      openSlots = shares ? rows * boxesAcross - (qty - sharedRowQty) : 0;
+      openRowHeightMm = shares ? item.boxHeightMm : 0;
+      openAcross = boxesAcross;
     } else {
       openSlots -= sharedRowQty;
     }
@@ -136,8 +165,8 @@ function buildLayers(skus: PalletSku[], widthMm: number): PalletLayer[] {
   });
 }
 
-function layeredHeightMm(skus: PalletSku[], widthMm: number): number {
-  return buildLayers(skus, widthMm).reduce((sum, l) => sum + l.heightMm, PALLET_BASE_HEIGHT_MM);
+function layeredHeightMm(skus: PalletSku[], widthMm: number, sharePumpRows = false): number {
+  return buildLayers(skus, widthMm, sharePumpRows).reduce((sum, l) => sum + l.heightMm, PALLET_BASE_HEIGHT_MM);
 }
 
 function longestBoxMm(skus: PalletSku[]): number {
@@ -321,6 +350,99 @@ function buildPumpDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] {
   return drafts;
 }
 
+// Freepack (factory-style) pump packing: every pump of the pool, longest first,
+// fills the pallet box by box, sharing part-filled rows across products, until
+// the next box would break the weight, height or length cap; then a new pallet.
+// Products split across pallets freely. Factory benchmark: 7 across × 10 rows of
+// 152mm boxes on a 1,110mm pallet, up to ~2,000kg.
+function buildFilledPumpDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] {
+  const drafts: PalletDraft[] = [];
+  let skus: PalletSku[] = [];
+  let palletWidthMm = 0;
+  const close = () => {
+    if (skus.length > 0) drafts.push({ skus, widthMm: palletWidthMm, motorOnly: false, sharedRows: true });
+    skus = [];
+    palletWidthMm = 0;
+  };
+  // Most of this item that still fits on the open pallet (monotone, so bisect).
+  // A box longer than the length cap can't be helped: the pallet is then as long
+  // as its bottom box (computeShipment warns), and still fills by weight and height.
+  const mostThatFits = (item: OrderItem, widthMm: number, upTo: number) => {
+    const maxLengthMm = Math.max(cfg.maxPalletLengthMm, (skus[0]?.item ?? item).boxLengthMm);
+    const fits = (qty: number) => {
+      const next = [...skus, { item, qty }];
+      return palletGrossKg(next) <= cfg.maxPalletGrossKg &&
+        longestBoxMm(next) <= maxLengthMm &&
+        layeredHeightMm(next, widthMm, true) <= cfg.maxPumpTotalHeightMm;
+    };
+    let lo = 0;
+    let hi = upTo;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (fits(mid)) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+
+  // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
+  for (const item of [...items].sort(bottomLayerFirst)) {
+    let remaining = item.quantity;
+    while (remaining > 0) {
+      const below = skus[skus.length - 1];
+      const widthMm = Math.max(palletWidthMm, resolvePalletWidth(item, cfg));
+      const allowed = !below || canSitOn({ item, qty: 1 }, below);
+      const qty = allowed ? mostThatFits(item, widthMm, remaining) : 0;
+      if (qty === 0) {
+        if (skus.length > 0) {
+          close();
+          continue;
+        }
+        // A single box over a limit still gets a pallet of its own
+        skus = [{ item, qty: 1 }];
+        palletWidthMm = widthMm;
+        remaining -= 1;
+        close();
+        continue;
+      }
+      skus.push({ item, qty });
+      palletWidthMm = widthMm;
+      remaining -= qty;
+      if (remaining > 0) close();
+    }
+  }
+  close();
+  return drafts;
+}
+
+// Freepack V4 motors: loose boxes in wooden crates, one variant per crate, up to
+// CRATE_MAX_QTY boxes and CRATE_MAX_GROSS_KG gross each.
+function buildCrateDrafts(items: OrderItem[]): PalletDraft[] {
+  const drafts: PalletDraft[] = [];
+  for (const item of items) {
+    const perCrate = Math.max(1, Math.min(
+      CRATE_MAX_QTY,
+      Math.floor((CRATE_MAX_GROSS_KG - WOOD_WEIGHT.CRATE) / item.grossWeightKg),
+    ));
+    for (let left = item.quantity; left > 0; left -= perCrate) {
+      drafts.push({ skus: [{ item, qty: Math.min(perCrate, left) }], widthMm: 0, motorOnly: true, crate: true });
+    }
+  }
+  return drafts;
+}
+
+// Crate size around its boxes: boxes lie lengthwise, in a near-square block
+// (40 boxes: 6 across × 7 high), plus CRATE_WALL_MM each side.
+function crateGeometry(item: OrderItem, qty: number): { lengthMm: number; widthMm: number; heightMm: number } {
+  const across = Math.max(1, Math.floor(Math.sqrt(qty)));
+  const rows = Math.ceil(qty / across);
+  return {
+    lengthMm: item.boxLengthMm + 2 * CRATE_WALL_MM,
+    widthMm: across * item.boxWidthMm + 2 * CRATE_WALL_MM,
+    heightMm: rows * item.boxHeightMm + 2 * CRATE_WALL_MM,
+  };
+}
+
 // Each HP variant fills its own pallets up to the weight limit. What's left of each
 // variant is then clubbed in bottom-layer order, each remainder staying whole on the
 // first pallet it fits. Remainders that don't fit start another pallet.
@@ -336,7 +458,7 @@ function buildMotorDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] 
     ));
     // Motor columns run along the pallet: only as many as the length cap allows
     // (at least one, so a motor longer than the cap still gets a pallet)
-    const perPallet = Math.min(perPalletByWeight, maxMotorsWithinLength(item, cfg));
+    const perPallet = Math.min(perPalletByWeight, maxMotorsWithinLength(item, cfg), cfg.motorQtyPerPallet);
     for (let i = 0; i < Math.floor(item.quantity / perPallet); i++) {
       drafts.push({ skus: [{ item, qty: perPallet }], widthMm, motorOnly: true });
     }
@@ -349,7 +471,8 @@ function buildMotorDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] 
   for (const remainder of remainders.sort((a, b) => bottomLayerFirst(a.item, b.item))) {
     const pallet = clubbed.find(skus =>
       palletGrossKg([...skus, remainder]) <= cfg.maxPalletGrossKg &&
-      motorPalletLengthMm([...skus, remainder], cfg) <= cfg.maxPalletLengthMm
+      motorPalletLengthMm([...skus, remainder], cfg) <= cfg.maxPalletLengthMm &&
+      boxCount(skus) + remainder.qty <= cfg.motorQtyPerPallet
     );
     if (pallet) pallet.push(remainder);
     else clubbed.push([remainder]);
@@ -365,7 +488,7 @@ function maxMotorsWithinLength(item: OrderItem, cfg: PresetConfig): number {
   if (!Number.isFinite(cfg.maxPalletLengthMm)) return Infinity;
   const { layers } = computeMotorPalletGeometry(item, Number.MAX_SAFE_INTEGER, cfg);
   const columns = Math.max(1, Math.floor(cfg.maxPalletLengthMm / item.boxLengthMm));
-  return columns * MOTORS_PER_ROW * layers;
+  return columns * cfg.motorsPerRow * layers;
 }
 
 // Length of a motor-only pallet holding these motors (as finalizePallet builds it)
@@ -486,29 +609,32 @@ function mergeSmallMotorPallets(motors: PalletDraft[], pumps: PalletDraft[], cfg
 }
 
 
-function finalizePallet(draft: PalletDraft, index: number, cfg: PresetConfig): PalletPlan {
-  const { skus, widthMm, motorOnly } = draft;
+function finalizePallet(draft: PalletDraft, palletId: string, cfg: PresetConfig): PalletPlan {
+  const { skus, motorOnly } = draft;
+  let { widthMm } = draft;
   const totalQty = boxCount(skus);
   const bottom = skus[0].item;
   let lengthMm: number;
   let heightMm: number;
   let layers: PalletLayer[] | undefined;
-  if (motorOnly) {
+  if (draft.crate) {
+    ({ lengthMm, widthMm, heightMm } = crateGeometry(skus[0].item, totalQty));
+  } else if (motorOnly) {
     // Mixed pallets are as long as their longest motor box
     const longest = skus.reduce((a, b) => (b.item.boxLengthMm > a.item.boxLengthMm ? b : a)).item;
     ({ lengthMm, heightMm } = computeMotorPalletGeometry(longest, totalQty, cfg));
   } else {
-    layers = buildLayers(skus, widthMm);
+    layers = buildLayers(skus, widthMm, draft.sharedRows);
     lengthMm = longestBoxMm(skus);
-    heightMm = layeredHeightMm(skus, widthMm);
+    heightMm = layeredHeightMm(skus, widthMm, draft.sharedRows);
   }
   const grossKg = boxesGrossKg(skus);
-  const woodWeightKg = woodKg(skus);
+  const woodWeightKg = draft.crate ? WOOD_WEIGHT.CRATE : woodKg(skus);
   const totalNetKg = skus.reduce((sum, { item, qty }) => sum + item.netWeightKg * qty, 0);
   const cbm = (lengthMm * widthMm * heightMm) / 1_000_000_000;
 
   return {
-    palletId: `SK-${String(index + 1).padStart(2, '0')}`,
+    palletId,
     family: bottom.palletFamily,
     productCode: bottom.productCode,
     productCodes: skus.map(s => s.item.productCode),
@@ -530,6 +656,7 @@ function finalizePallet(draft: PalletDraft, index: number, cfg: PresetConfig): P
     totalGrossKg: Math.round((grossKg + woodWeightKg) * 10) / 10,
     isMixedSku: skus.length > 1,
     customer: bottom.customer,
+    ...(draft.crate && { kind: 'crate' as const }),
   };
 }
 
@@ -558,17 +685,32 @@ export function buildPalletPlans(items: OrderItem[], cfg: PresetConfig = STANDAR
   const sortedGroups = Array.from(groups.values()).sort((a, b) => groupGrossKg(b) - groupGrossKg(a));
 
   // All pump pallets first, then motors, which may finish on top of a pump pallet
+  // Freepack fills pump pallets factory-style; the other presets build layered pallets
+  const pumpDrafts = (g: OrderItem[]) => cfg.allowCrossFamily ? buildFilledPumpDrafts(g, cfg) : buildPumpDrafts(g, cfg);
   const pumps = clubLeftovers(mergeSmallPumpPallets(
-    sortedGroups.filter(g => !isMotor(g[0])).flatMap(g => buildPumpDrafts(g, cfg)),
+    sortedGroups.filter(g => !isMotor(g[0])).flatMap(pumpDrafts),
     cfg,
   ), cfg);
+  // V4 motors go in crates when the preset says so; they never top a pump pallet
+  const crated = (i: OrderItem) => cfg.v4MotorsInCrates && i.productType === 'motor-V4';
+  const motorGroups = sortedGroups.filter(g => isMotor(g[0]));
+  const crates = buildCrateDrafts(motorGroups.flatMap(g => g.filter(crated)));
   const motors = mergeSmallMotorPallets(
-    sortedGroups.filter(g => isMotor(g[0])).flatMap(g => buildMotorDrafts(g, cfg)),
+    motorGroups
+      .map(g => g.filter(i => !crated(i)))
+      .filter(g => g.length > 0)
+      .flatMap(g => buildMotorDrafts(g, cfg)),
     pumps,
     cfg,
   );
 
-  return [...pumps, ...motors].map((draft, i) => finalizePallet(draft, i, cfg));
+  // Pallets numbered SK-01…, crates CR-01…
+  let palletNo = 0;
+  let crateNo = 0;
+  const id = (d: PalletDraft) => d.crate
+    ? `CR-${String(++crateNo).padStart(2, '0')}`
+    : `SK-${String(++palletNo).padStart(2, '0')}`;
+  return [...pumps, ...motors, ...crates].map(draft => finalizePallet(draft, id(draft), cfg));
 }
 
 // ─── Stacking ────────────────────────────────────────────────────────────────
@@ -623,8 +765,11 @@ export function stackPallets(pallets: PalletPlan[], maxPairs = Infinity): Pallet
   });
 }
 
-function fitsFloor(pallets: PalletPlan[], containerLength: number): boolean {
-  return packPallets(pallets, containerLength).every(p => !p.overflow);
+// Floor packing: rows in length order (packPallets), or with turning (Freepack)
+type FloorPacker = (pallets: PalletPlan[], containerLength: number) => PlacedPallet[];
+
+function fitsFloor(pallets: PalletPlan[], containerLength: number, pack: FloorPacker): boolean {
+  return pack(pallets, containerLength).every(p => !p.overflow);
 }
 
 const FCL_OPTIONS = [
@@ -645,21 +790,22 @@ function fitContainer(
   option: FclOption,
   totalCBM: number,
   totalGrossKg: number,
+  pack: FloorPacker,
 ): PalletPlan[] | null {
   if (built.some(p => p.lengthMm > option.inner.lengthMm)) return null;
   if (totalCBM > option.limits.maxCBM || totalGrossKg > option.limits.maxPayloadKg) return null;
-  if (fitsFloor(built, option.inner.lengthMm)) return built;
+  if (fitsFloor(built, option.inner.lengthMm, pack)) return built;
   const possiblePairs = stackedPairCount(stackPallets(built));
   for (let pairs = 1; pairs <= possiblePairs; pairs++) {
     const stacked = stackPallets(built, pairs);
-    if (fitsFloor(stacked, option.inner.lengthMm)) return stacked;
+    if (fitsFloor(stacked, option.inner.lengthMm, pack)) return stacked;
   }
   return null;
 }
 
 // Fills 40ft containers one at a time, each within its floor, CBM and payload
 // limits. Every pallet passed in must fit a 40ft on its own.
-function loadInto40ftContainers(pallets: PalletPlan[]): PlacedPallet[][] {
+function loadInto40ftContainers(pallets: PalletPlan[], pack: FloorPacker): PlacedPallet[][] {
   const { inner, limits } = FCL_OPTIONS[1];
   const loads: PlacedPallet[][] = [];
   let remaining = pallets;
@@ -667,7 +813,7 @@ function loadInto40ftContainers(pallets: PalletPlan[]): PlacedPallet[][] {
     const load: PlacedPallet[] = [];
     let cbm = 0;
     let grossKg = 0;
-    for (const placed of packPallets(remaining, inner.lengthMm)) {
+    for (const placed of pack(remaining, inner.lengthMm)) {
       const unit = placed.stackedPallet ? [placed.pallet, placed.stackedPallet] : [placed.pallet];
       const unitCbm = unit.reduce((s, p) => s + p.cbm, 0);
       const unitKg = unit.reduce((s, p) => s + p.totalGrossKg, 0);
@@ -693,6 +839,7 @@ export function computeShipment(
   preset: RulePreset = DEFAULT_PRESET,
 ): ShipmentResult {
   const cfg = presetConfig;
+  const pack: FloorPacker = cfg.rotatePalletsOnFloor ? packPalletsTurning : packPallets;
   // Pallets start unstacked; stacking is used only if the floor needs it
   const built = buildPalletPlans(items, cfg);
   let pallets = built;
@@ -727,7 +874,7 @@ export function computeShipment(
   let chosen: FclOption | null = null;
   let chosenPallets: PalletPlan[] | null = null;
   for (const option of FCL_OPTIONS) {
-    chosenPallets = fitContainer(built, option, totalCBM, totalGrossKg);
+    chosenPallets = fitContainer(built, option, totalCBM, totalGrossKg, pack);
     if (chosenPallets) {
       chosen = option;
       break;
@@ -764,7 +911,7 @@ export function computeShipment(
   } else if (chosen && chosenPallets) {
     containerRecommendation = chosen.key;
     pallets = chosenPallets;
-    placed = packPallets(pallets, chosen.inner.lengthMm);
+    placed = pack(pallets, chosen.inner.lengthMm);
     warnStackedPairs(chosen.label);
     const payloadUse = totalGrossKg / chosen.limits.maxPayloadKg;
     if (payloadUse > 0.9) {
@@ -776,12 +923,12 @@ export function computeShipment(
     const loadable = built.filter(p => p.lengthMm <= CONTAINER_INNER_40FT.lengthMm);
     const tooLong = built.filter(p => p.lengthMm > CONTAINER_INNER_40FT.lengthMm);
     // Fewest stacked pairs that still reach the lowest container count
-    const lowestCount = loadInto40ftContainers(stackPallets(loadable)).length;
+    const lowestCount = loadInto40ftContainers(stackPallets(loadable), pack).length;
     let stacked = loadable;
-    let loads = loadInto40ftContainers(stacked);
+    let loads = loadInto40ftContainers(stacked, pack);
     for (let pairs = 1; loads.length > lowestCount; pairs++) {
       stacked = stackPallets(loadable, pairs);
-      loads = loadInto40ftContainers(stacked);
+      loads = loadInto40ftContainers(stacked, pack);
     }
     pallets = [...stacked, ...tooLong];
     // Only the first container is drawn; the floor plan labels it as such

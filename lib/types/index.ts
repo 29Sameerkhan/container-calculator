@@ -57,6 +57,7 @@ export interface PalletPlan {
   stackedWith?: string;
   stackPosition?: 'bottom' | 'top';
   isLongPallet?: boolean;
+  kind?: 'crate';          // a wooden crate of loose boxes (no pallet base); absent for a pallet
 }
 
 export interface PlacedPallet {
@@ -109,6 +110,10 @@ export interface PresetConfig {
   maxPalletGrossKg: number;
   maxPalletLengthMm: number;   // max pallet footprint length (the dimension that runs along the container floor)
   allowCrossFamily: boolean;   // if true, pumps and motors can share a pallet
+  motorsPerRow: number;        // motors side by side across a motor pallet
+  motorQtyPerPallet: number;   // target motors per motor pallet; Infinity = limited by height/weight only
+  v4MotorsInCrates: boolean;   // V4 motors go in wooden crates (no pallet base) instead of on pallets
+  rotatePalletsOnFloor: boolean; // floor packing may turn pallets 90° and fill rows best-fit
 }
 
 // A pallet's floor position set by hand in the floor plan editor: mm from the

@@ -3,7 +3,7 @@
 import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
 import {
-  applyPositions, CONTAINER_INNER_WIDTH_MM, CONTAINERS, floorLayout, footprintLabel, footprintLength,
+  applyPositions, CONTAINER_INNER_WIDTH_MM, CONTAINERS, floorLayout, footprintLabel, footprintLength, footprintWidth,
   LayoutIssue, PlacedPallet, sideLanes, validateLayout,
 } from '@/lib/engine/floorPlan';
 import { familyColorMap } from '@/lib/familyColors';
@@ -175,10 +175,10 @@ export default function ContainerFloorPlan({
   // Inside the floor, on the grid, snapped flush to walls and other footprints
   function constrain(p: PlacedPallet, rawX: number, rawY: number): { x: number; y: number } {
     const len = footprintLength(p);
-    const wid = p.pallet.widthMm;
+    const wid = footprintWidth(p);
     const others = placed.filter(o => o.pallet.palletId !== p.pallet.palletId);
     const xs = [0, containerLength - len, ...others.flatMap(o => [o.x + footprintLength(o), o.x - len, o.x])];
-    const ys = [0, C_WIDTH_MM - wid, ...others.flatMap(o => [o.y + o.pallet.widthMm, o.y - wid, o.y])];
+    const ys = [0, C_WIDTH_MM - wid, ...others.flatMap(o => [o.y + footprintWidth(o), o.y - wid, o.y])];
     return {
       x: clamp(snap(rawX, xs), 0, Math.max(0, containerLength - len)),
       y: clamp(snap(rawY, ys), 0, Math.max(0, C_WIDTH_MM - wid)),
@@ -241,7 +241,7 @@ export default function ContainerFloorPlan({
     e.preventDefault();
     const len = footprintLength(p);
     const x = clamp(p.x + d[0], 0, Math.max(0, containerLength - len));
-    const y = clamp(p.y + d[1], 0, Math.max(0, C_WIDTH_MM - p.pallet.widthMm));
+    const y = clamp(p.y + d[1], 0, Math.max(0, C_WIDTH_MM - footprintWidth(p)));
     if (x !== p.x || y !== p.y) commitMove(p.pallet.palletId, x, y);
   }
 
@@ -250,7 +250,7 @@ export default function ContainerFloorPlan({
   const minX = Math.min(0, ...shown.map(p => p.x));
   const maxX = Math.max(containerLength, ...shown.map(p => p.x + footprintLength(p)));
   const minY = Math.min(0, ...shown.map(p => p.y));
-  const maxY = Math.max(C_WIDTH_MM, ...shown.map(p => p.y + p.pallet.widthMm));
+  const maxY = Math.max(C_WIDTH_MM, ...shown.map(p => p.y + footprintWidth(p)));
   const topScale = TOP_VIEW_PX / (maxX - minX); // px per mm
   const topHeightPx = Math.round((maxY - minY) * topScale);
   const pxToMm = (n: number) => n / topScale;
@@ -275,14 +275,15 @@ export default function ContainerFloorPlan({
   const sideShapes = [...shown]
     .sort((a, b) => (laneOf.get(b) ?? 0) - (laneOf.get(a) ?? 0) || stackHeight(b) - stackHeight(a))
     .flatMap(placedPallet => {
-      const { pallet, stackedPallet, x, overflow } = placedPallet;
+      const { pallet, stackedPallet, x, overflow, rotated } = placedPallet;
       const lane = laneOf.get(placedPallet) ?? 0;
       const layers = [{ p: pallet, baseMm: 0, isTop: false }];
       if (stackedPallet) layers.push({ p: stackedPallet, baseMm: pallet.heightMm, isTop: true });
 
       return layers.map(({ p, baseMm, isTop }) => {
         const floorX = px(Math.max(0, Math.min(x, container.LENGTH - 10)));
-        const w = overflow ? Math.max(4, Math.min(px(p.lengthMm), cL - floorX)) : px(p.lengthMm);
+        const alongMm = rotated ? p.widthMm : p.lengthMm;
+        const w = overflow ? Math.max(4, Math.min(px(alongMm), cL - floorX)) : px(alongMm);
         const h = px(p.heightMm);
         return {
           id: p.palletId,
@@ -409,7 +410,7 @@ export default function ContainerFloorPlan({
               const { pallet, stackedPallet, x, y, overflow } = p;
               const id = pallet.palletId;
               const len = footprintLength(p);
-              const wid = pallet.widthMm;
+              const wid = footprintWidth(p);
               const wPx = len * topScale;
               const hPx = wid * topScale;
               const color = overflow ? '#ef4444' : (familyColors[pallet.family] ?? '#94a3b8');
