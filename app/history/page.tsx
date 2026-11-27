@@ -77,7 +77,8 @@ export default function HistoryPage() {
   }
 
   useEffect(() => {
-    fetch('/api/calculations')
+    // no-store: always the latest list, never a copy from the browser cache
+    fetch('/api/calculations', { cache: 'no-store' })
       .then(r => r.json())
       .then(data => {
         if (data.success) setRows(data.calculations);
