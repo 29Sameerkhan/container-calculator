@@ -107,6 +107,7 @@ export interface PresetConfig {
   maxPumpTotalHeightMm: number;
   maxMotorTotalHeightMm: number;
   maxPalletGrossKg: number;
+  maxPalletLengthMm: number;   // max pallet footprint length (the dimension that runs along the container floor)
   allowCrossFamily: boolean;   // if true, pumps and motors can share a pallet
 }
 

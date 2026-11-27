@@ -203,6 +203,7 @@ function fitsOnePallet(skus: PalletSku[], widthMm: number, cfg: PresetConfig): b
   return (
     skus.every((layer, i) => i === 0 || canSitOn(layer, skus[i - 1])) &&
     palletGrossKg(skus) <= cfg.maxPalletGrossKg &&
+    longestBoxMm(skus) <= cfg.maxPalletLengthMm &&
     layeredHeightMm(skus, widthMm) <= cfg.maxPumpTotalHeightMm
   );
 }
@@ -330,9 +331,12 @@ function buildMotorDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] 
 
   for (const item of [...items].sort((a, b) => b.quantity - a.quantity)) {
     // A single motor over the weight limit still gets a pallet of its own
-    const perPallet = Math.max(1, Math.floor(
+    const perPalletByWeight = Math.max(1, Math.floor(
       (cfg.maxPalletGrossKg - resolveWoodWeight(item, false)) / item.grossWeightKg
     ));
+    // Motor columns run along the pallet: only as many as the length cap allows
+    // (at least one, so a motor longer than the cap still gets a pallet)
+    const perPallet = Math.min(perPalletByWeight, maxMotorsWithinLength(item, cfg));
     for (let i = 0; i < Math.floor(item.quantity / perPallet); i++) {
       drafts.push({ skus: [{ item, qty: perPallet }], widthMm, motorOnly: true });
     }
@@ -343,12 +347,31 @@ function buildMotorDrafts(items: OrderItem[], cfg: PresetConfig): PalletDraft[] 
   const clubbed: PalletSku[][] = [];
   // Per Mahendra: longest box always at bottom; weight is tiebreaker only.
   for (const remainder of remainders.sort((a, b) => bottomLayerFirst(a.item, b.item))) {
-    const pallet = clubbed.find(skus => palletGrossKg([...skus, remainder]) <= cfg.maxPalletGrossKg);
+    const pallet = clubbed.find(skus =>
+      palletGrossKg([...skus, remainder]) <= cfg.maxPalletGrossKg &&
+      motorPalletLengthMm([...skus, remainder], cfg) <= cfg.maxPalletLengthMm
+    );
     if (pallet) pallet.push(remainder);
     else clubbed.push([remainder]);
   }
   clubbed.forEach(skus => drafts.push({ skus, widthMm, motorOnly: true }));
   return drafts;
+}
+
+// Most motors of this item one pallet holds within the preset's length cap:
+// whole columns along the pallet, each MOTORS_PER_ROW across and full height.
+// Infinity when the preset has no length cap.
+function maxMotorsWithinLength(item: OrderItem, cfg: PresetConfig): number {
+  if (!Number.isFinite(cfg.maxPalletLengthMm)) return Infinity;
+  const { layers } = computeMotorPalletGeometry(item, Number.MAX_SAFE_INTEGER, cfg);
+  const columns = Math.max(1, Math.floor(cfg.maxPalletLengthMm / item.boxLengthMm));
+  return columns * MOTORS_PER_ROW * layers;
+}
+
+// Length of a motor-only pallet holding these motors (as finalizePallet builds it)
+function motorPalletLengthMm(skus: PalletSku[], cfg: PresetConfig): number {
+  const longest = skus.reduce((a, b) => (b.item.boxLengthMm > a.item.boxLengthMm ? b : a)).item;
+  return computeMotorPalletGeometry(longest, boxCount(skus), cfg).lengthMm;
 }
 
 function sameCustomer(a: PalletDraft, b: PalletDraft): boolean {
@@ -429,6 +452,7 @@ function clubLeftovers(drafts: PalletDraft[], cfg: PresetConfig): PalletDraft[] 
       const clubbed = clubbedDraft(a, b);
       if (
         palletGrossKg(clubbed.skus) > cfg.maxPalletGrossKg ||
+        longestBoxMm(clubbed.skus) > cfg.maxPalletLengthMm ||
         layeredHeightMm(clubbed.skus, clubbed.widthMm) > cfg.maxPumpTotalHeightMm
       ) continue;
       used.add(a);
@@ -689,6 +713,9 @@ export function computeShipment(
     }
     if (p.lengthMm > MAX_PUMP_PALLET_LENGTH_MM) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds practical pallet limit (${MAX_PUMP_PALLET_LENGTH_MM}mm) — verify floor-plan with Mahendra`);
+    }
+    if (p.lengthMm > cfg.maxPalletLengthMm) {
+      warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds the ${cfg.maxPalletLengthMm}mm pallet length cap — a single box is longer than the cap`);
     }
     if (p.totalGrossKg > cfg.maxPalletGrossKg) {
       warnings.push(`${p.palletId}: gross weight ${p.totalGrossKg}kg — verify forklift capacity`);

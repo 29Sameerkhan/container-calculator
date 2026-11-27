@@ -78,6 +78,7 @@ export const PRESET_CONFIGS: Record<RulePreset, PresetConfig> = {
     maxPumpTotalHeightMm: MAX_PUMP_TOTAL_HEIGHT_MM,
     maxMotorTotalHeightMm: MAX_MOTOR_TOTAL_HEIGHT_MM,
     maxPalletGrossKg: MAX_PALLET_GROSS_KG,
+    maxPalletLengthMm: Infinity,   // current behaviour, no cap
     allowCrossFamily: false,
   },
   relaxed: {
@@ -86,6 +87,7 @@ export const PRESET_CONFIGS: Record<RulePreset, PresetConfig> = {
     maxPumpTotalHeightMm: 1500,
     maxMotorTotalHeightMm: 1500,
     maxPalletGrossKg: 2000,
+    maxPalletLengthMm: Infinity,   // relaxed changes height and weight only
     allowCrossFamily: false,
   },
   // Factory-style packing
@@ -95,6 +97,8 @@ export const PRESET_CONFIGS: Record<RulePreset, PresetConfig> = {
     maxPumpTotalHeightMm: 1770,
     maxMotorTotalHeightMm: 1770,
     maxPalletGrossKg: 2000,
+    // Factory practice: the longest pump pallet is ~1,640mm; 160mm margin
+    maxPalletLengthMm: 1800,
     allowCrossFamily: true,
   },
 };
@@ -113,7 +117,7 @@ export const PRESET_LABELS: Record<RulePreset, string> = {
 export const PRESET_SUMMARIES: Record<RulePreset, string> = {
   standard: 'Pump 1,030mm · Motor 750mm wide · Height 1,050 / 1,080mm · Max pallet weight 1,500kg',
   relaxed: 'Height cap raised to 1,500mm · Max pallet weight 2,000kg',
-  freepack: 'Factory-style · 1,110mm wide · 1,770mm height · mixed families allowed',
+  freepack: 'Factory-style · 1,110mm wide · 1,770mm height · max 1,800mm long · mixed families allowed',
 };
 
 export function isRulePreset(value: unknown): value is RulePreset {
