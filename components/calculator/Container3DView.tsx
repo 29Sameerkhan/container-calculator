@@ -342,7 +342,11 @@ export default function Container3DView({ pallets, recommendation, placed: saved
         const familyColor = p.overflow ? OVERFLOW_COLOR
           : isTop && overloaded ? OVERLOAD_COLOR
             : (familyColors[pallet.family] ?? '#94a3b8');
-        for (const { wood, ...box } of palletBoxes(pallet, 0, 0, floorMm)) {
+        // A marketing box on top sits centred on its pallet (pallet's own axes)
+        const centre = isTop && pallet.kind === 'marketing'
+          ? { x: (p.pallet.lengthMm - pallet.lengthMm) / 2, z: (p.pallet.widthMm - pallet.widthMm) / 2 }
+          : { x: 0, z: 0 };
+        for (const { wood, ...box } of palletBoxes(pallet, centre.x, centre.z, floorMm)) {
           // Built at the origin, then placed; a pallet turned 90° swaps length and width
           const placedBox = p.rotated
             ? { ...box, x: p.x + box.z, z: p.y + box.x, l: box.w, w: box.l }

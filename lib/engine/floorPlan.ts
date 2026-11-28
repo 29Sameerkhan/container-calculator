@@ -361,19 +361,29 @@ export interface LayoutIssue {
   message: string;
 }
 
-// Why two overlapping footprints can't be stacked by hand. Only the hard rules
-// block: a footprint that is already a pair can't take a third pallet, the top
-// must fit on the bottom (the heavier pallet always goes at the bottom), marketing
-// material never stacks, and
-// consignees stay apart. Weight and height limits never block a hand-made stack;
-// stackWarnings flags them instead. The engine keeps its own stricter rules
-// (stackingProblem). Null when they can be stacked.
-export function stackRefusal(a: PlacedPallet, b: PlacedPallet): string | null {
-  const pair = [a, b].find(p => p.stackedPallet);
+// Which of two pallets goes at the bottom of a hand-made stack: a marketing
+// material box always goes on top; otherwise the heavier pallet is the bottom
+export function stackOrder(a: PalletPlan, b: PalletPlan): [bottom: PalletPlan, top: PalletPlan] {
+  if (a.kind === 'marketing' && b.kind !== 'marketing') return [b, a];
+  if (b.kind === 'marketing' && a.kind !== 'marketing') return [a, b];
+  return a.totalGrossKg >= b.totalGrossKg ? [a, b] : [b, a];
+}
+
+// Why `moved` can't be stacked by hand with `target`, the footprint it was
+// dropped on. Only the hard rules block: a footprint that is already a pair can't
+// take a third pallet, nothing goes on top of a marketing material box (a box may
+// be dropped onto a pallet, never a pallet onto a box), the top must fit on the
+// bottom, and consignees stay apart. Weight and height limits never block a
+// hand-made stack; stackWarnings flags them instead. The engine keeps its own
+// stricter rules (stackingProblem) and never stacks marketing material itself.
+// Null when they can be stacked.
+export function stackRefusal(moved: PlacedPallet, target: PlacedPallet): string | null {
+  const pair = [moved, target].find(p => p.stackedPallet);
   if (pair) return `${footprintLabel(pair)} is already a stacked pair (no triple stacking)`;
-  const marketing = [a, b].find(p => p.pallet.kind === 'marketing');
-  if (marketing) return `${marketing.pallet.palletId} is marketing material, which is not stackable`;
-  const [bottom, top] = a.pallet.totalGrossKg >= b.pallet.totalGrossKg ? [a.pallet, b.pallet] : [b.pallet, a.pallet];
+  if (target.pallet.kind === 'marketing') {
+    return `nothing can be stacked on ${target.pallet.palletId}: it is marketing material (a marketing box can only go on top of a pallet)`;
+  }
+  const [bottom, top] = stackOrder(moved.pallet, target.pallet);
   if (top.lengthMm > bottom.lengthMm || top.widthMm > bottom.widthMm) {
     return `${top.palletId} (${top.lengthMm}×${top.widthMm}mm) doesn't fit on ${bottom.palletId} (${bottom.lengthMm}×${bottom.widthMm}mm)`;
   }
@@ -381,6 +391,16 @@ export function stackRefusal(a: PlacedPallet, b: PlacedPallet): string | null {
     return `${top.palletId} and ${bottom.palletId} belong to different customers`;
   }
   return null;
+}
+
+// Where a marketing box on top of a pallet sits: centred on the pallet, in floor
+// coordinates (x along the container, y across), with its floor-plan size
+export function topBoxRect(p: PlacedPallet): { x: number; y: number; len: number; wid: number } | null {
+  const top = p.stackedPallet;
+  if (!top || top.kind !== 'marketing') return null;
+  const len = p.rotated ? top.widthMm : top.lengthMm;
+  const wid = p.rotated ? top.lengthMm : top.widthMm;
+  return { x: p.x + (footprintLength(p) - len) / 2, y: p.y + (footprintWidth(p) - wid) / 2, len, wid };
 }
 
 // Interior height of every container (mm): a stack taller than this sticks out
@@ -474,15 +494,21 @@ export function validateLayout(
       const a = placed[i];
       const b = placed[j];
       if (!overlaps(a, b)) continue;
-      const why = stackRefusal(a, b);
+      // Stackable if either one may be dropped onto the other; when neither may,
+      // the reason given is for dropping onto the pallet rather than the box
+      const whyAB = stackRefusal(a, b);
+      const whyBA = stackRefusal(b, a);
+      const why = whyAB && whyBA ? (b.pallet.kind === 'marketing' ? whyBA : whyAB) : null;
+      const box = [a, b].find(p => p.pallet.kind === 'marketing');
+      const howTo = box
+        ? ` They can be stacked: drag ${box.pallet.palletId} fully onto ${(box === a ? b : a).pallet.palletId}.`
+        : ` They can be stacked: drag one fully onto the other.`;
       issues.push({
         kind: 'overlap',
         severity: 'error',
         palletIds: [a.pallet.palletId, b.pallet.palletId],
         message: `[${footprintLabel(a)}] overlaps [${footprintLabel(b)}]. Pallets cannot occupy the same floor space.` +
-          (why
-            ? ` Can't stack: ${why}.`
-            : ` They can be stacked: drag one fully onto the other.`),
+          (why ? ` Can't stack: ${why}.` : howTo),
       });
     }
   }

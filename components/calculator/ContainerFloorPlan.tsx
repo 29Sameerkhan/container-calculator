@@ -4,9 +4,9 @@ import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } fro
 import { PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
 import {
   applyPositions, CONTAINER_INNER_WIDTH_MM, CONTAINERS, floorLayout, footprintLabel, footprintLength, footprintWidth,
-  findFreeSpot, LayoutIssue, overlaps, PlacedPallet, sideLanes, stackRefusal, StackWarning, stackWarnings, validateLayout,
+  findFreeSpot, LayoutIssue, overlaps, PlacedPallet, sideLanes, stackOrder, stackRefusal, StackWarning, stackWarnings, topBoxRect, validateLayout,
 } from '@/lib/engine/floorPlan';
-import { familyColorMap } from '@/lib/familyColors';
+import { familyColorMap, MARKETING_COLOR } from '@/lib/familyColors';
 
 interface Props {
   pallets: PalletPlan[];
@@ -180,7 +180,8 @@ export default function ContainerFloorPlan({
     if (mayStack && moved && hits.length === 1 && centreOn(hits[0]) && !stackRefusal(moved, hits[0])) {
       const target = hits[0];
       const before = placed.find(p => p.pallet.palletId === id);
-      const [bottom, top] = moved.pallet.totalGrossKg >= target.pallet.totalGrossKg ? [moved, target] : [target, moved];
+      // A marketing box always goes on top; otherwise the heavier pallet is the bottom
+      const [bottom, top] = stackOrder(moved.pallet, target.pallet)[0] === moved.pallet ? [moved, target] : [target, moved];
       // The top keeps a position to return to if it's unstacked: where the
       // dragged pallet came from, or where the pallet it was dropped on stood
       const topHome = top === moved && before ? { x: before.x, y: before.y } : { x: target.x, y: target.y };
@@ -355,8 +356,10 @@ export default function ContainerFloorPlan({
       if (stackedPallet) layers.push({ p: stackedPallet, baseMm: pallet.heightMm, isTop: true });
 
       return layers.map(({ p, baseMm, isTop }) => {
-        const floorX = px(Math.max(0, Math.min(x, container.LENGTH - 10)));
         const alongMm = rotated ? p.widthMm : p.lengthMm;
+        // A marketing box on top sits centred along its pallet
+        const centreMm = isTop && p.kind === 'marketing' ? (footprintLength(placedPallet) - alongMm) / 2 : 0;
+        const floorX = px(Math.max(0, Math.min(x + centreMm, container.LENGTH - 10)));
         const w = overflow ? Math.max(4, Math.min(px(alongMm), cL - floorX)) : px(alongMm);
         const h = px(p.heightMm);
         return {
@@ -513,6 +516,7 @@ export default function ContainerFloorPlan({
               const isDragging = drag?.moved && drag.id === id;
               const hasError = flagged.has(id);
               const warns = stackWarns.get(id);
+              const topBox = topBoxRect(p);
               // Red when the stack sticks out of the container, else orange
               const warnColor = warns?.some(w => w.kind === 'height-overflow') ? HEIGHT_OVERFLOW_COLOR : OVERLOAD_COLOR;
               const label = footprintLabel(p);
@@ -551,6 +555,16 @@ export default function ContainerFloorPlan({
                     vectorEffect="non-scaling-stroke"
                     rx={pxToMm(2)}
                   />
+                  {/* Marketing box stacked on this pallet: drawn where it sits, centred on it */}
+                  {topBox && (
+                    <rect
+                      x={topBox.x} y={topBox.y} width={topBox.len} height={topBox.wid}
+                      fill={MARKETING_COLOR} fillOpacity={0.85}
+                      stroke="white" strokeWidth={1.5} strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke" rx={pxToMm(1)}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
                   {/* Marketing material: dashed inner border marks a loose box, not a pallet */}
                   {pallet.kind === 'marketing' && wPx > 10 && hPx > 10 && (
                     <rect
