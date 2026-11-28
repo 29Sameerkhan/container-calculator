@@ -143,13 +143,12 @@ export default async function PublicPlanPage({
           customerName={isConsolidated ? '' : row.customerName}
           orderRef={isConsolidated ? '' : row.orderRef}
         />
-        {/* Opens on the 3D tab: that's what the PDF's QR code promises */}
+        {/* The 3D view sits beside the floor plan: that's what the PDF's QR code promises */}
         <ContainerViewTabs
           key={shown}
           pallets={result.pallets}
           recommendation={result.containerRecommendation}
           placed={result.placed}
-          initialTab="3d"
         />
         <PalletPlanTable pallets={result.pallets} />
       </div>

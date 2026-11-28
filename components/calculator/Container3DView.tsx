@@ -1,7 +1,7 @@
 'use client';
 
 import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { applyPositions, CONTAINERS, footprintLength, packPallets, PlacedPallet } from '@/lib/engine/floorPlan';
+import { applyPositions, CONTAINERS, footprintLength, packPallets, PlacedPallet, stackWarnings } from '@/lib/engine/floorPlan';
 import { PALLET_BASE_HEIGHT_MM } from '@/lib/constants';
 import { familyColorMap } from '@/lib/familyColors';
 import { PalletLayer, PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
@@ -21,6 +21,11 @@ interface Props {
 }
 
 const OVERFLOW_COLOR = '#ef4444';
+// Top pallet of a stack over a weight or clearance limit
+const OVERLOAD_COLOR = '#f97316';
+// The part of a stack above the container ceiling: see-through red
+const CEILING_OVERFLOW_COLOR = '#dc2626';
+const CEILING_OVERFLOW_OPACITY = 0.5;
 const WOOD_COLOR = '#8b5a2b';
 const HOVER_EMISSIVE = 0x333333;
 
@@ -193,6 +198,7 @@ export default function Container3DView({ pallets, recommendation, placed: saved
   const familyColors = useMemo(() => familyColorMap(pallets), [pallets]);
 
   const overflowCount = placed.filter(p => p.overflow).length;
+  const stackKinds = new Set(placed.flatMap(p => stackWarnings(p).map(w => w.kind)));
 
   // Fetch the library
   useEffect(() => {
@@ -275,9 +281,13 @@ export default function Container3DView({ pallets, recommendation, placed: saved
     const edgeMaterial = new T.LineBasicMaterial({ color: new T.Color('#0f172a'), transparent: true, opacity: 0.3 });
     disposables.push(edgeMaterial);
 
-    const addBox = (box: Box, color: string, palletId: string) => {
+    const addBox = (box: Box, color: string, palletId: string, opacity = 1) => {
       const geometry = new T.BoxGeometry(box.l, box.h, box.w);
-      const material = new T.MeshLambertMaterial({ color: new T.Color(color) });
+      const material = new T.MeshLambertMaterial(
+        opacity < 1
+          ? { color: new T.Color(color), transparent: true, opacity, depthWrite: false }
+          : { color: new T.Color(color) },
+      );
       const mesh = new T.Mesh(geometry, material);
       mesh.position.set(box.x + box.l / 2, box.y + box.h / 2, box.z + box.w / 2);
       mesh.userData.palletId = palletId;
@@ -316,21 +326,37 @@ export default function Container3DView({ pallets, recommendation, placed: saved
 
     // Pallets, at the positions the floor plan draws them. A top pallet of a stack
     // sits on its bottom pallet. Overflow pallets stay at their true position, past
-    // the container end, in red.
+    // the container end, in red. The top pallet of a stack over a weight limit is
+    // orange; whatever stands above the ceiling is drawn see-through red, sticking
+    // out of the container.
     let extentL = L;
+    let extentH = H;
     for (const p of placed) {
       extentL = Math.max(extentL, p.x + footprintLength(p));
+      const overloaded = stackWarnings(p).some(w => w.kind === 'overload');
       const stack = p.stackedPallet
-        ? [{ pallet: p.pallet, floorMm: 0 }, { pallet: p.stackedPallet, floorMm: p.pallet.heightMm }]
-        : [{ pallet: p.pallet, floorMm: 0 }];
-      for (const { pallet, floorMm } of stack) {
-        const familyColor = p.overflow ? OVERFLOW_COLOR : (familyColors[pallet.family] ?? '#94a3b8');
+        ? [{ pallet: p.pallet, floorMm: 0, isTop: false }, { pallet: p.stackedPallet, floorMm: p.pallet.heightMm, isTop: true }]
+        : [{ pallet: p.pallet, floorMm: 0, isTop: false }];
+      for (const { pallet, floorMm, isTop } of stack) {
+        const familyColor = p.overflow ? OVERFLOW_COLOR
+          : isTop && overloaded ? OVERLOAD_COLOR
+            : (familyColors[pallet.family] ?? '#94a3b8');
         for (const { wood, ...box } of palletBoxes(pallet, 0, 0, floorMm)) {
           // Built at the origin, then placed; a pallet turned 90° swaps length and width
           const placedBox = p.rotated
             ? { ...box, x: p.x + box.z, z: p.y + box.x, l: box.w, w: box.l }
             : { ...box, x: p.x + box.x, z: p.y + box.z };
-          addBox(placedBox, wood ? WOOD_COLOR : familyColor, pallet.palletId);
+          const color = wood ? WOOD_COLOR : familyColor;
+          const topMm = placedBox.y + placedBox.h;
+          if (topMm <= H) {
+            addBox(placedBox, color, pallet.palletId);
+            continue;
+          }
+          // Split at the ceiling: inside as usual, the rest red above the roof
+          extentH = Math.max(extentH, topMm);
+          if (placedBox.y < H) addBox({ ...placedBox, h: H - placedBox.y }, color, pallet.palletId);
+          const outFrom = Math.max(placedBox.y, H);
+          addBox({ ...placedBox, y: outFrom, h: topMm - outFrom }, CEILING_OVERFLOW_COLOR, pallet.palletId, CEILING_OVERFLOW_OPACITY);
         }
       }
     }
@@ -338,7 +364,7 @@ export default function Container3DView({ pallets, recommendation, placed: saved
     scene.add(group);
     stage.pickable = pickable;
     stage.solids = solids;
-    stage.bounds = { l: extentL, h: H, w: W };
+    stage.bounds = { l: extentL, h: extentH, w: W };
 
     // Opening view: above and to the front-right, far enough to frame everything.
     // Only for a new result or container: a pallet moved in the floor plan editor
@@ -347,10 +373,10 @@ export default function Container3DView({ pallets, recommendation, placed: saved
     const reframe = !last || last.stage !== stage || last.pallets !== pallets || last.length !== L;
     framedFor.current = { stage, pallets, length: L };
     const dir = { x: 0.5, y: 0.42, z: 0.757 }; // unit length
-    const distance = FRAME_MARGIN * fitDistance({ l: extentL, h: H, w: W }, dir, camera.aspect);
-    const radius = Math.hypot(extentL, H, W) / 2;
+    const distance = FRAME_MARGIN * fitDistance({ l: extentL, h: extentH, w: W }, dir, camera.aspect);
+    const radius = Math.hypot(extentL, extentH, W) / 2;
     if (reframe) {
-      controls.target.set(extentL / 2, H / 2, W / 2);
+      controls.target.set(extentL / 2, extentH / 2, W / 2);
       camera.position.set(
         controls.target.x + dir.x * distance,
         controls.target.y + dir.y * distance,
@@ -511,6 +537,18 @@ export default function Container3DView({ pallets, recommendation, placed: saved
           <span className="w-3 h-3 rounded-sm inline-block" style={{ background: WOOD_COLOR }} />
           Wood base
         </span>
+        {stackKinds.has('overload') && (
+          <span className="flex items-center gap-1.5 text-xs text-orange-700">
+            <span className="w-3 h-3 rounded-sm inline-block" style={{ background: OVERLOAD_COLOR }} />
+            Overloaded stack (top pallet)
+          </span>
+        )}
+        {stackKinds.has('height-overflow') && (
+          <span className="flex items-center gap-1.5 text-xs text-red-600">
+            <span className="w-3 h-3 rounded-sm inline-block" style={{ background: CEILING_OVERFLOW_COLOR, opacity: CEILING_OVERFLOW_OPACITY }} />
+            Above container ceiling
+          </span>
+        )}
         {overflowCount > 0 && (
           <span className="flex items-center gap-1.5 text-xs text-red-600">
             <span className="w-3 h-3 rounded-sm inline-block" style={{ background: OVERFLOW_COLOR }} />
