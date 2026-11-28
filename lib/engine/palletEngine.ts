@@ -116,6 +116,7 @@ interface PalletDraft {
   motorOnly: boolean;
   sharedRows?: boolean;  // pump layers may share a part-filled row (Freepack fill)
   crate?: boolean;       // a wooden crate of loose motor boxes
+  marketing?: boolean;   // one box of marketing material, straight on the floor
 }
 
 // Boxes side-by-side across a pallet of this width. Motors are always
@@ -428,6 +429,14 @@ function buildCrateDrafts(items: OrderItem[]): PalletDraft[] {
   return drafts;
 }
 
+// Marketing material: every box is its own floor unit, as entered (no pallet
+// base, no wood, never stacked), so a line of 3 boxes gives 3 units
+function buildMarketingDrafts(items: OrderItem[]): PalletDraft[] {
+  return items.flatMap(item =>
+    Array.from({ length: item.quantity }, () => ({ skus: [{ item, qty: 1 }], widthMm: 0, motorOnly: false, marketing: true })),
+  );
+}
+
 // Crate size around its boxes: boxes lie lengthwise, in a near-square block
 // (40 boxes: 6 across × 7 high), plus CRATE_WALL_MM each side.
 function crateGeometry(item: OrderItem, qty: number): { lengthMm: number; widthMm: number; heightMm: number } {
@@ -614,7 +623,9 @@ function finalizePallet(draft: PalletDraft, palletId: string, cfg: PresetConfig)
   let lengthMm: number;
   let heightMm: number;
   let layers: PalletLayer[] | undefined;
-  if (draft.crate) {
+  if (draft.marketing) {
+    ({ boxLengthMm: lengthMm, boxWidthMm: widthMm, boxHeightMm: heightMm } = bottom);
+  } else if (draft.crate) {
     ({ lengthMm, widthMm, heightMm } = crateGeometry(skus[0].item, totalQty));
   } else if (motorOnly) {
     // Mixed pallets are as long as their longest motor box
@@ -626,7 +637,7 @@ function finalizePallet(draft: PalletDraft, palletId: string, cfg: PresetConfig)
     heightMm = layeredHeightMm(skus, widthMm, draft.sharedRows);
   }
   const grossKg = boxesGrossKg(skus);
-  const woodWeightKg = draft.crate ? WOOD_WEIGHT.CRATE : woodKg(skus);
+  const woodWeightKg = draft.marketing ? 0 : draft.crate ? WOOD_WEIGHT.CRATE : woodKg(skus);
   const totalNetKg = skus.reduce((sum, { item, qty }) => sum + item.netWeightKg * qty, 0);
   const cbm = (lengthMm * widthMm * heightMm) / 1_000_000_000;
 
@@ -654,11 +665,16 @@ function finalizePallet(draft: PalletDraft, palletId: string, cfg: PresetConfig)
     isMixedSku: skus.length > 1,
     customer: bottom.customer,
     ...(draft.crate && { kind: 'crate' as const }),
+    ...(draft.marketing && { kind: 'marketing' as const }),
   };
 }
 
-export function buildPalletPlans(items: OrderItem[], cfg: PresetConfig = STANDARD): PalletPlan[] {
+export function buildPalletPlans(allItems: OrderItem[], cfg: PresetConfig = STANDARD): PalletPlan[] {
   const groups = new Map<string, OrderItem[]>();
+  // Marketing material is kept out of every pallet and crate, line by line (two
+  // lines may share a description but not a box size)
+  const marketing = buildMarketingDrafts(allItems.filter(i => i.productType === 'marketing'));
+  const items = allItems.filter(i => i.productType !== 'marketing');
 
   // A product code entered on several lines is one line with the summed
   // quantity (other fields from its first line); kept apart per customer
@@ -701,13 +717,16 @@ export function buildPalletPlans(items: OrderItem[], cfg: PresetConfig = STANDAR
     cfg,
   );
 
-  // Pallets numbered SK-01…, crates CR-01…
+  // Pallets numbered SK-01…, crates CR-01…, marketing material boxes MM-01…
   let palletNo = 0;
   let crateNo = 0;
-  const id = (d: PalletDraft) => d.crate
-    ? `CR-${String(++crateNo).padStart(2, '0')}`
-    : `SK-${String(++palletNo).padStart(2, '0')}`;
-  return [...pumps, ...motors, ...crates].map(draft => finalizePallet(draft, id(draft), cfg));
+  let marketingNo = 0;
+  const id = (d: PalletDraft) => d.marketing
+    ? `MM-${String(++marketingNo).padStart(2, '0')}`
+    : d.crate
+      ? `CR-${String(++crateNo).padStart(2, '0')}`
+      : `SK-${String(++palletNo).padStart(2, '0')}`;
+  return [...pumps, ...motors, ...crates, ...marketing].map(draft => finalizePallet(draft, id(draft), cfg));
 }
 
 // ─── Stacking ────────────────────────────────────────────────────────────────
@@ -835,12 +854,12 @@ export function computeShipment(
   const totalGrossKg = pallets.reduce((sum, p) => sum + p.totalGrossKg, 0);
 
   pallets.forEach((p) => {
-    if (p.kind === 'crate') {
-      // A crate stands on the container floor with no pallet base: its limit is
-      // the container's interior height, not a pallet height cap
+    if (p.kind === 'crate' || p.kind === 'marketing') {
+      // A crate or marketing box stands on the container floor with no pallet
+      // base: its limit is the container's interior height, not a pallet height cap
       if (p.heightMm > CONTAINER_INNER_20FT.heightMm) {
         warnings.push(
-          `${p.palletId}: Crate height ${p.heightMm.toLocaleString('en-US')}mm exceeds container interior height limit of ` +
+          `${p.palletId}: ${p.kind === 'crate' ? 'Crate' : 'Marketing material box'} height ${p.heightMm.toLocaleString('en-US')}mm exceeds container interior height limit of ` +
           `${CONTAINER_INNER_20FT.heightMm.toLocaleString('en-US')}mm`,
         );
       }
@@ -856,10 +875,11 @@ export function computeShipment(
     } else if (p.lengthMm > CONTAINER_INNER_20FT.lengthMm) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds 20ft internal length — requires 40ft container`);
     }
-    if (p.lengthMm > MAX_PUMP_PALLET_LENGTH_MM) {
+    // Pallet length caps don't apply to a marketing box: it is entered as it is
+    if (p.kind !== 'marketing' && p.lengthMm > MAX_PUMP_PALLET_LENGTH_MM) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds practical pallet limit (${MAX_PUMP_PALLET_LENGTH_MM}mm) — verify floor-plan with Mahendra`);
     }
-    if (p.lengthMm > cfg.maxPalletLengthMm) {
+    if (p.kind !== 'marketing' && p.lengthMm > cfg.maxPalletLengthMm) {
       warnings.push(`${p.palletId}: length ${p.lengthMm}mm exceeds the ${cfg.maxPalletLengthMm}mm pallet length cap — a single box is longer than the cap`);
     }
     if (p.totalGrossKg > cfg.maxPalletGrossKg) {

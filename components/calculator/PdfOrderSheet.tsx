@@ -2,6 +2,7 @@
 
 import { ReactNode } from 'react';
 import { OrderItem, ShipmentOrder } from '@/lib/types';
+import { marketingLabel } from '@/lib/format';
 
 // Parts of the plan that only appear in the downloaded PDF: a company header
 // and the product lines the plan was calculated from. They are hidden on
@@ -14,6 +15,7 @@ const PRODUCT_TYPE_LABEL: Record<OrderItem['productType'], string> = {
   'motor-V8': 'Motor V8',
   controller: 'Controller',
   spare: 'Spare',
+  marketing: 'Marketing Material',
 };
 
 function PdfOnly({ children }: { children: ReactNode }) {
@@ -85,9 +87,17 @@ export function PdfOrderLines({ orders }: { orders: ShipmentOrder[] }) {
               <tbody className="divide-y divide-gray-100">
                 {order.items.map((item, j) => (
                   <tr key={j}>
-                    <td className="py-2 pr-3 font-medium text-gray-800">{item.productCode}</td>
+                    <td className="py-2 pr-3 font-medium text-gray-800">
+                      {item.productCode}
+                      {/* Marketing material: its size and weight per box, as entered */}
+                      {item.productType === 'marketing' && (
+                        <div className="font-normal text-purple-700">
+                          {marketingLabel({ lengthMm: item.boxLengthMm, widthMm: item.boxWidthMm, heightMm: item.boxHeightMm, grossKg: item.grossWeightKg })}
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2 pr-3 text-gray-600">{PRODUCT_TYPE_LABEL[item.productType] ?? item.productType}</td>
-                    <td className="py-2 pr-3 text-gray-600">{item.palletFamily}</td>
+                    <td className="py-2 pr-3 text-gray-600">{item.productType === 'marketing' ? '—' : item.palletFamily}</td>
                     <td className="py-2 pr-3 text-right">{item.quantity}</td>
                     <td className="py-2 pr-3 text-right font-mono">
                       {item.boxLengthMm} × {item.boxWidthMm} × {item.boxHeightMm}

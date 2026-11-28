@@ -81,7 +81,7 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
         <div>
           <p className="text-xs text-gray-500">Total Pallets</p>
           <p className="text-lg font-semibold text-gray-800">
-            {result.pallets.some(p => p.kind === 'crate') ? palletCountLabel(result.pallets) : result.pallets.length}
+            {result.pallets.some(p => p.kind) ? palletCountLabel(result.pallets) : result.pallets.length}
           </p>
         </div>
         <div>

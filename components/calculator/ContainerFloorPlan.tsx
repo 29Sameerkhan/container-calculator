@@ -551,6 +551,15 @@ export default function ContainerFloorPlan({
                     vectorEffect="non-scaling-stroke"
                     rx={pxToMm(2)}
                   />
+                  {/* Marketing material: dashed inner border marks a loose box, not a pallet */}
+                  {pallet.kind === 'marketing' && wPx > 10 && hPx > 10 && (
+                    <rect
+                      x={x + pxToMm(3)} y={y + pxToMm(3)} width={len - pxToMm(6)} height={wid - pxToMm(6)}
+                      fill="none" stroke="white" strokeWidth={1.5} strokeDasharray="4 3" strokeOpacity={0.9}
+                      vectorEffect="non-scaling-stroke" rx={pxToMm(1)}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
                   {/* Stacked: inner border marks two pallets on this footprint */}
                   {stackedPallet && wPx > 10 && hPx > 10 && (
                     <rect

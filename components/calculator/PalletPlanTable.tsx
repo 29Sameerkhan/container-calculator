@@ -3,13 +3,22 @@
 import { Fragment } from 'react';
 import { PalletPlan } from '@/lib/types';
 import { toFloorUnits } from '@/lib/engine/floorPlan';
-import { palletCountLabel } from '@/lib/format';
+import { marketingLabel, palletCountLabel } from '@/lib/format';
 
 interface Props {
   pallets: PalletPlan[];
 }
 
 function ProductCell({ p }: { p: PalletPlan }) {
+  if (p.kind === 'marketing') {
+    const label = marketingLabel({ lengthMm: p.lengthMm, widthMm: p.widthMm, heightMm: p.heightMm, grossKg: p.totalGrossKg });
+    return (
+      <div>
+        {p.productCode !== 'Marketing Material' && <span className="truncate block" title={p.productCode}>{p.productCode}</span>}
+        <span className="block text-purple-700">{label}</span>
+      </div>
+    );
+  }
   return p.isMixedSku ? (
     <div>
       <span className="inline-block mb-1 text-[10px] font-semibold bg-amber-100 text-amber-700 rounded px-1.5 py-0.5 uppercase tracking-wide">
@@ -72,6 +81,12 @@ export default function PalletPlanTable({ pallets }: Props) {
                   <td className="py-2.5 pr-4 font-mono text-xs font-semibold text-gray-700 whitespace-nowrap">
                     {top ? `${p.palletId} + ${top.palletId}` : p.palletId}
                     {/* Crates are loose boxes in a wooden crate, not on a pallet */}
+                    {/* Marketing material: one box straight on the floor */}
+                    {p.kind === 'marketing' && (
+                      <span className="ml-2 font-sans text-[10px] font-semibold bg-purple-100 text-purple-700 rounded px-1.5 py-0.5 uppercase">
+                        Marketing
+                      </span>
+                    )}
                     {p.kind === 'crate' && (
                       <span className="ml-2 font-sans text-[10px] font-semibold bg-stone-200 text-stone-700 rounded px-1.5 py-0.5 uppercase">
                         Crate

@@ -12,6 +12,9 @@ function kg(n: number): string {
 // stacking rules (canStack), shared with the floor plan editor so a stack made
 // by hand is held to the same limits. The same for every preset.
 export function stackingProblem(bottom: PalletPlan, top: PalletPlan): string | null {
+  // Marketing material boxes stand alone: nothing on them, and never on anything
+  const marketing = [bottom, top].find(p => p.kind === 'marketing');
+  if (marketing) return `${marketing.palletId} is marketing material, which is not stackable`;
   // Fits within the bottom footprint
   if (top.lengthMm > bottom.lengthMm || top.widthMm > bottom.widthMm) {
     return `${top.palletId} (${top.lengthMm}×${top.widthMm}mm) doesn't fit on ${bottom.palletId} (${bottom.lengthMm}×${bottom.widthMm}mm)`;

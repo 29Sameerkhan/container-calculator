@@ -363,13 +363,16 @@ export interface LayoutIssue {
 
 // Why two overlapping footprints can't be stacked by hand. Only the hard rules
 // block: a footprint that is already a pair can't take a third pallet, the top
-// must fit on the bottom (the heavier pallet always goes at the bottom), and
+// must fit on the bottom (the heavier pallet always goes at the bottom), marketing
+// material never stacks, and
 // consignees stay apart. Weight and height limits never block a hand-made stack;
 // stackWarnings flags them instead. The engine keeps its own stricter rules
 // (stackingProblem). Null when they can be stacked.
 export function stackRefusal(a: PlacedPallet, b: PlacedPallet): string | null {
   const pair = [a, b].find(p => p.stackedPallet);
   if (pair) return `${footprintLabel(pair)} is already a stacked pair (no triple stacking)`;
+  const marketing = [a, b].find(p => p.pallet.kind === 'marketing');
+  if (marketing) return `${marketing.pallet.palletId} is marketing material, which is not stackable`;
   const [bottom, top] = a.pallet.totalGrossKg >= b.pallet.totalGrossKg ? [a.pallet, b.pallet] : [b.pallet, a.pallet];
   if (top.lengthMm > bottom.lengthMm || top.widthMm > bottom.widthMm) {
     return `${top.palletId} (${top.lengthMm}×${top.widthMm}mm) doesn't fit on ${bottom.palletId} (${bottom.lengthMm}×${bottom.widthMm}mm)`;
