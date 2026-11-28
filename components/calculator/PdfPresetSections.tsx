@@ -60,8 +60,8 @@ export default function PdfPresetSections({ results, links }: { results: PresetR
               {links && <ViewIn3d preset={preset} link={links[preset]} />}
               <div className="grid grid-cols-4 gap-4 pt-4 border-t border-gray-100">
                 <Stat
-                  label={r.pallets.some(p => p.kind === 'crate') ? 'Pallets + Crates' : 'Total Pallets'}
-                  value={r.pallets.some(p => p.kind === 'crate') ? palletCountLabel(r.pallets) : String(r.pallets.length)}
+                  label={r.pallets.some(p => p.kind === 'marketing') ? 'Floor Units' : r.pallets.some(p => p.kind === 'crate') ? 'Pallets + Crates' : 'Total Pallets'}
+                  value={r.pallets.some(p => p.kind) ? palletCountLabel(r.pallets) : String(r.pallets.length)}
                 />
                 <Stat label="Net Weight" value={kg(netKg)} />
                 <Stat label="Gross Weight" value={kg(r.totalGrossKg)} />

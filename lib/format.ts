@@ -10,10 +10,22 @@ export function formatSavedAt(createdAt: string): string {
 }
 
 
-// "13 pallets", or "13 pallets + 3 crates" when some units are crates
-export function palletCountLabel(pallets: Array<{ kind?: 'crate' }>): string {
+// "13 pallets", or "13 pallets + 3 crates + 2 marketing boxes" when some units
+// are crates or marketing material boxes
+export function palletCountLabel(pallets: Array<{ kind?: 'crate' | 'marketing' }>): string {
   const crates = pallets.filter(p => p.kind === 'crate').length;
-  const onPallets = pallets.length - crates;
-  const palletPart = `${onPallets} pallet${onPallets === 1 ? '' : 's'}`;
-  return crates > 0 ? `${palletPart} + ${crates} crate${crates === 1 ? '' : 's'}` : palletPart;
+  const marketing = pallets.filter(p => p.kind === 'marketing').length;
+  const onPallets = pallets.length - crates - marketing;
+  return [
+    `${onPallets} pallet${onPallets === 1 ? '' : 's'}`,
+    crates > 0 && `${crates} crate${crates === 1 ? '' : 's'}`,
+    marketing > 0 && `${marketing} marketing box${marketing === 1 ? '' : 'es'}`,
+  ].filter(Boolean).join(' + ');
+}
+
+// One marketing material box as printed in the plan and PDF:
+// "Marketing Material — 600×400×300 mm, 12kg"
+export function marketingLabel(box: { lengthMm: number; widthMm: number; heightMm: number; grossKg: number }): string {
+  const n = (v: number) => Math.round(v * 10) / 10;
+  return `Marketing Material — ${n(box.lengthMm)}×${n(box.widthMm)}×${n(box.heightMm)} mm, ${n(box.grossKg)}kg`;
 }

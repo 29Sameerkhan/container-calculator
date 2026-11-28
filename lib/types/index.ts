@@ -1,6 +1,6 @@
 export interface OrderItem {
   productCode: string;
-  productType: 'pump' | 'motor-V4' | 'motor-V6' | 'motor-V8' | 'controller' | 'spare';
+  productType: 'pump' | 'motor-V4' | 'motor-V6' | 'motor-V8' | 'controller' | 'spare' | 'marketing';
   palletFamily: string;
   quantity: number;
   boxLengthMm: number;
@@ -57,7 +57,9 @@ export interface PalletPlan {
   stackedWith?: string;
   stackPosition?: 'bottom' | 'top';
   isLongPallet?: boolean;
-  kind?: 'crate';          // a wooden crate of loose boxes (no pallet base); absent for a pallet
+  // crate: a wooden crate of loose boxes (no pallet base); marketing: one box of
+  // marketing material on the floor (no pallet base, never stacked); absent for a pallet
+  kind?: 'crate' | 'marketing';
 }
 
 export interface PlacedPallet {

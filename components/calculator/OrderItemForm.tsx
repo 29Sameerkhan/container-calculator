@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { OrderItem } from '@/lib/types';
 import { PUMP_PALLET_FAMILIES } from '@/lib/constants';
+import { MARKETING_FAMILY } from '@/lib/familyColors';
 import { calcPumpBox, hasStageWeight, isValidStages, pumpColumnFromCode, stageSeriesFor, MIN_STAGES, MAX_STAGES } from '@/lib/engine/pumpStageData';
 import { calcMotorBox, parseMotorCode } from '@/lib/engine/motorData';
 import { normaliseProductCode } from '@/lib/engine/utils';
@@ -27,6 +28,8 @@ const PRODUCT_TYPES = [
   { value: 'motor-V8', label: 'Motor V8' },
   { value: 'controller', label: 'Controller' },
   { value: 'spare', label: 'Spare Part' },
+  // Loose boxes straight on the floor: size and weight typed in, no catalog
+  { value: 'marketing', label: 'Marketing Material' },
 ] as const;
 
 // Pallet family options depend on product type
@@ -36,6 +39,7 @@ function getFamilyOptions(productType: OrderItem['productType']): string[] {
   if (productType === 'motor-V8') return ['SM-V8'];
   if (productType === 'controller') return ['controller'];
   if (productType === 'spare') return ['spare'];
+  if (productType === 'marketing') return [MARKETING_FAMILY];
   return PUMP_PALLET_FAMILIES;
 }
 
@@ -98,6 +102,8 @@ const PARSE_FAMILIES = ['SK02', 'SK03', 'SK05', 'SK09', 'SK12', 'SK13', 'SK14', 
 // Fills the line from its item code: a motor code (SM-…) or a pump code (SK…).
 // Returns null, leaving the row as it is, when the code isn't recognised.
 function parseItemCode(entered: OrderItem): OrderItem | null {
+  // Marketing material's code is a free description, never a catalog code
+  if (entered.productType === 'marketing') return null;
   const row = { ...entered, productCode: normaliseProductCode(entered.productCode) };
   return parseMotorItem(row) ?? parsePumpItem(row);
 }
@@ -144,7 +150,7 @@ function pumpCodeParts(code: string): { series: string; stagesPart: string } | n
 // Why a line's box isn't filled from its code, or null when it is (or the
 // code is empty). Shown under the code so a line is never silently left out.
 export function codeWarning(row: OrderItem): string | null {
-  if (!row.productCode.trim() || isComplete(row)) return null;
+  if (!row.productCode.trim() || isComplete(row) || row.productType === 'marketing') return null;
   if (row.productType.startsWith('motor-') || parseMotorCode(row.productCode)) {
     return parseMotorItem(row) ? null : 'Motor not in the size table — enter box and weights by hand.';
   }
@@ -298,10 +304,18 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
     // If product type changes, reset pallet family to first valid option
     if (field === 'productType') {
       const newType = value as OrderItem['productType'];
+      const code = updated[index].productCode;
       updated[index] = {
         ...updated[index],
         productType: newType,
         palletFamily: getFamilyOptions(newType)[0],
+        // Marketing material needs no catalog code: it gets a description to edit,
+        // which is dropped again if the line goes back to a catalog type
+        productCode: newType === 'marketing'
+          ? code.trim() || MARKETING_FAMILY
+          : code === MARKETING_FAMILY ? '' : code,
+        // No net weight for a marketing box; the gross weight is its weight
+        ...(newType === 'marketing' && { netWeightKg: 0 }),
       };
     } else {
       updated[index] = { ...updated[index], [field]: value };
@@ -521,7 +535,7 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
                 onKeyDown={e => handleEnter(e, i)}
                 data-row={i}
                 data-field="productCode"
-                placeholder="SK77-50-NK80X65…"
+                placeholder={row.productType === 'marketing' ? 'Description, e.g. Brochures' : 'SK77-50-NK80X65…'}
                 className={INPUT}
               />
             </div>
@@ -539,15 +553,22 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
             </div>
             <div>
               <label className={FIELD_LABEL}>Family</label>
-              <select
-                value={row.palletFamily}
-                onChange={e => updateRow(i, 'palletFamily', e.target.value)}
-                className={INPUT}
-              >
-                {getFamilyOptions(row.productType).map(f => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
+              {row.productType === 'marketing' ? (
+                // No catalog lookup: box size and weight are typed in this line
+                <div className="w-full rounded border border-purple-200 bg-purple-50 px-2 py-1 text-xs text-purple-700">
+                  On floor · no pallet
+                </div>
+              ) : (
+                <select
+                  value={row.palletFamily}
+                  onChange={e => updateRow(i, 'palletFamily', e.target.value)}
+                  className={INPUT}
+                >
+                  {getFamilyOptions(row.productType).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              )}
             </div>
             {NUMBER_FIELDS.map(({ field, label, className }) => {
               const series = stageSeriesFor(row.palletFamily);
@@ -592,9 +613,12 @@ export default function OrderItemForm({ onRowsChange, initialRows, onImportDetai
                 );
               }
               if (series && (field === 'boxHeightMm' || field === 'netWeightKg')) return null;
+              const marketing = row.productType === 'marketing';
+              // Marketing material: one weight per box (the gross); the Net slot stays empty
+              if (marketing && field === 'netWeightKg') return <div key={field} className={className} />;
               return (
               <div key={field} className={className}>
-                <label className={FIELD_LABEL}>{label}</label>
+                <label className={FIELD_LABEL}>{marketing && field === 'grossWeightKg' ? 'Weight kg/box' : label}</label>
                 <input
                   type="number"
                   value={row[field] === 0 ? '' : row[field]}
