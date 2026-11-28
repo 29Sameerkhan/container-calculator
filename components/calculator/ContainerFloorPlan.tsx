@@ -4,7 +4,7 @@ import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } fro
 import { PalletPlan, PalletPositions, ShipmentResult } from '@/lib/types';
 import {
   applyPositions, CONTAINER_INNER_WIDTH_MM, CONTAINERS, floorLayout, footprintLabel, footprintLength, footprintWidth,
-  findFreeSpot, LayoutIssue, overlaps, PlacedPallet, sideLanes, stackRefusal, validateLayout,
+  findFreeSpot, LayoutIssue, overlaps, PlacedPallet, sideLanes, stackRefusal, StackWarning, stackWarnings, validateLayout,
 } from '@/lib/engine/floorPlan';
 import { familyColorMap } from '@/lib/familyColors';
 
@@ -41,6 +41,10 @@ const KEY_STEP_MM = 10;
 const CLICK_MAX_MOVE_PX = 4;
 const TOAST_MS = 5000;
 const ERROR_COLOR = '#dc2626';
+// Stack warnings: orange for a weight / clearance overload, red for a stack
+// taller than the container (both warn; neither blocks Save)
+const OVERLOAD_COLOR = '#ea580c';
+const HEIGHT_OVERFLOW_COLOR = '#dc2626';
 
 function px(mm: number) { return Math.round(mm * SCALE); }
 
@@ -138,6 +142,10 @@ export default function ContainerFloorPlan({
     ? placed.map(p => (p.pallet.palletId === drag.id ? { ...p, x: drag.x, y: drag.y } : p))
     : placed;
   const overflowCount = shown.filter(p => p.overflow).length;
+  // Weight / height warnings per stacked footprint, in every mode (the PDF too)
+  const stackWarns = new Map<string, StackWarning[]>(
+    shown.map(p => [p.pallet.palletId, stackWarnings(p)] as [string, StackWarning[]]).filter(([, w]) => w.length > 0),
+  );
   const stackedCount = shown.filter(p => p.stackedPallet).length;
 
   // ── Toasts ────────────────────────────────────────────────────────────────
@@ -152,10 +160,11 @@ export default function ContainerFloorPlan({
 
   // Saves a footprint's new position and toasts any error it now takes part in.
   // Dragged so its centre lands on exactly one other single pallet (not just
-  // clipping an edge, and never by an arrow-key nudge), it's a stacking intent: if the
-  // stacking rules allow it, the heavier pallet becomes the bottom and the pair
-  // stands where the other pallet stood. Otherwise the overlap error stands, with
-  // the reason the stack isn't allowed.
+  // clipping an edge, and never by an arrow-key nudge), it's a stacking intent: unless
+  // a hard rule refuses it (fit, triple stack, customers), the heavier pallet becomes
+  // the bottom and the pair stands where the other pallet stood. Weight and height
+  // limits never block the stack; they're shown as warnings on it. Otherwise the
+  // overlap error stands, with the reason the stack isn't allowed.
   function commitMove(id: string, x: number, y: number, mayStack = false) {
     if (!onPositionsChange || !layout) return;
     const next = { ...positions, [id]: { x, y } };
@@ -181,6 +190,9 @@ export default function ContainerFloorPlan({
         [top.pallet.palletId]: { ...topHome, stackedOn: bottom.pallet.palletId },
       });
       showToasts([`${top.pallet.palletId} stacked on ${bottom.pallet.palletId}.`], 'info');
+      // Weight and height limits don't block the stack; they're flagged on it
+      const pair = { ...target, pallet: bottom.pallet, stackedPallet: top.pallet };
+      showToasts(stackWarnings(pair).map(w => w.message), 'warning');
       return;
     }
     const errors = validateLayout(after, layout.containerLength, maxPalletGrossKg ?? Infinity, next)
@@ -320,7 +332,9 @@ export default function ContainerFloorPlan({
   // shifted up and right so its top and right edges stay visible.
   const laneOf = sideLanes(shown);
   const maxLane = Math.max(0, ...Array.from(laneOf.values()));
-  const sidePadTop = maxLane * LANE_DY;
+  // Headroom above the outline for a stack taller than the container
+  const sideOverflowPx = px(Math.max(0, ...shown.map(stackHeight)) - container.HEIGHT);
+  const sidePadTop = maxLane * LANE_DY + Math.max(0, sideOverflowPx);
   const sidePadRight = maxLane * LANE_DX;
 
   const familyColors = familyColorMap(pallets);
@@ -333,6 +347,10 @@ export default function ContainerFloorPlan({
     .flatMap(placedPallet => {
       const { pallet, stackedPallet, x, overflow, rotated } = placedPallet;
       const lane = laneOf.get(placedPallet) ?? 0;
+      const warns = stackWarns.get(pallet.palletId) ?? [];
+      // Top pallet of a flagged stack: red when it sticks out, orange when overloaded
+      const topColor = warns.some(w => w.kind === 'height-overflow') ? HEIGHT_OVERFLOW_COLOR
+        : warns.length > 0 ? OVERLOAD_COLOR : null;
       const layers = [{ p: pallet, baseMm: 0, isTop: false }];
       if (stackedPallet) layers.push({ p: stackedPallet, baseMm: pallet.heightMm, isTop: true });
 
@@ -349,7 +367,7 @@ export default function ContainerFloorPlan({
           w,
           h,
           isTop,
-          color: overflow ? '#ef4444' : (familyColors[p.family] ?? '#94a3b8'),
+          color: overflow ? '#ef4444' : (isTop && topColor) || (familyColors[p.family] ?? '#94a3b8'),
           isSel: selected === p.palletId,
           showLabel: !overflow && w > 24 && h > 14,
         };
@@ -475,7 +493,8 @@ export default function ContainerFloorPlan({
             onPointerCancel={() => setDrag(null)}
             role="img"
             aria-label={`Container floor plan, top view, ${shown.length} pallet positions`}
-            style={{ display: 'block', userSelect: 'none' }}
+            // Shrinks to fit a half-width panel; drags map through getScreenCTM so scaling is safe
+            style={{ display: 'block', userSelect: 'none', maxWidth: '100%', height: 'auto' }}
           >
             {/* Container floor */}
             <rect
@@ -493,6 +512,9 @@ export default function ContainerFloorPlan({
               const isSel = selected === id || (!!stackedPallet && selected === stackedPallet.palletId);
               const isDragging = drag?.moved && drag.id === id;
               const hasError = flagged.has(id);
+              const warns = stackWarns.get(id);
+              // Red when the stack sticks out of the container, else orange
+              const warnColor = warns?.some(w => w.kind === 'height-overflow') ? HEIGHT_OVERFLOW_COLOR : OVERLOAD_COLOR;
               const label = footprintLabel(p);
               const grossKg = pallet.totalGrossKg + (stackedPallet?.totalGrossKg ?? 0);
               const weightLabel = `${Math.round(grossKg).toLocaleString('en-US')} kg`;
@@ -510,7 +532,7 @@ export default function ContainerFloorPlan({
                   onKeyDown={e => handleKeyDown(e, p)}
                   tabIndex={0}
                   role="button"
-                  aria-label={`${label}, ${weightLabel}, ${Math.round(x)} mm from the front, ${Math.round(y)} mm from the left wall${hasError ? ', has a placement error' : ''}`}
+                  aria-label={`${label}, ${weightLabel}, ${Math.round(x)} mm from the front, ${Math.round(y)} mm from the left wall${hasError ? ', has a placement error' : ''}${warns ? `, ${warns.length} stack warning${warns.length > 1 ? 's' : ''}` : ''}`}
                   aria-pressed={isSel}
                   // touch-action must be set before the touch starts, or the browser scrolls instead
                   style={{
@@ -561,6 +583,23 @@ export default function ContainerFloorPlan({
                     >
                       {weightLabel}
                     </text>
+                  )}
+                  {warns && wPx > 14 && hPx > 14 && (
+                    // Hover shows the messages; a press still drags the footprint
+                    <g>
+                      <title>{warns.map(w => w.message).join('\n')}</title>
+                      <circle
+                        cx={x + pxToMm(9)} cy={y + pxToMm(9)} r={pxToMm(7)}
+                        fill={warnColor} stroke="white" strokeWidth={1.5} vectorEffect="non-scaling-stroke"
+                      />
+                      <text
+                        x={x + pxToMm(9)} y={y + pxToMm(9.5)}
+                        textAnchor="middle" dominantBaseline="middle"
+                        fontSize={pxToMm(9)} fill="white" fontWeight="700"
+                      >
+                        !
+                      </text>
+                    </g>
                   )}
                   {stackedPallet && wPx > 56 && hPx > 16 && (
                     <text
@@ -665,6 +704,17 @@ export default function ContainerFloorPlan({
 
       {/* Layout checks: the persistent list (toasts only flag the latest move) */}
       {editable && <LayoutIssueList issues={issues} errorCount={errorCount} />}
+      {/* Read-only (history, share link, PDF): the stack warnings alone */}
+      {!editable && stackWarns.size > 0 && (
+        <ul className="space-y-1">
+          {Array.from(stackWarns.values()).flat().map((w, i) => (
+            <li key={i} className={`text-xs rounded-lg border px-3 py-1.5 ${ISSUE_STYLE[w.kind].className}`}>
+              <span className="font-semibold uppercase mr-2">⚠ {ISSUE_STYLE[w.kind].tag}</span>
+              {w.message}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {/* Utilisation */}
       <div>
@@ -712,11 +762,24 @@ export default function ContainerFloorPlan({
   );
 }
 
+// Errors: solid red, tagged ERROR. Stack warnings: orange (overload) or a dashed
+// red outline (height overflow), tagged by what they are, so neither reads as an error.
+const ISSUE_STYLE: Record<StackWarning['kind'], { tag: string; className: string }> = {
+  'overload': { tag: 'Overload', className: 'bg-orange-50 border-orange-300 text-orange-800' },
+  'height-overflow': { tag: 'Height overflow', className: 'bg-white border-dashed border-red-400 text-red-700' },
+};
+
+function issueStyle(issue: LayoutIssue): { tag: string; className: string } {
+  if (issue.severity === 'error') return { tag: 'Error', className: 'bg-red-50 border-red-200 text-red-700' };
+  if (issue.kind === 'overload' || issue.kind === 'height-overflow') return ISSUE_STYLE[issue.kind];
+  return { tag: 'Warning', className: 'bg-amber-50 border-amber-200 text-amber-800' };
+}
+
 function LayoutIssueList({ issues, errorCount }: { issues: LayoutIssue[]; errorCount: number }) {
   if (issues.length === 0) {
     return (
       <p data-pdf-hide className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-        ✓ Layout checks passed — no overlaps, every pallet on the floor, all within the weight limit.
+        ✓ Layout checks passed — no overlaps, every pallet on the floor, all within the weight and height limits.
       </p>
     );
   }
@@ -730,15 +793,8 @@ function LayoutIssueList({ issues, errorCount }: { issues: LayoutIssue[]; errorC
       </p>
       <ul className="space-y-1">
         {issues.map((issue, i) => (
-          <li
-            key={i}
-            className={`text-xs rounded-lg border px-3 py-1.5 ${
-              issue.severity === 'error'
-                ? 'bg-red-50 border-red-200 text-red-700'
-                : 'bg-amber-50 border-amber-200 text-amber-800'
-            }`}
-          >
-            <span className="font-semibold uppercase mr-2">{issue.severity}</span>
+          <li key={i} className={`text-xs rounded-lg border px-3 py-1.5 ${issueStyle(issue).className}`}>
+            <span className="font-semibold uppercase mr-2">{issueStyle(issue).tag}</span>
             {issue.message}
           </li>
         ))}

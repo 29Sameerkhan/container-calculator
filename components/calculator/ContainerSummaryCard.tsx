@@ -3,6 +3,7 @@
 import { ShipmentResult } from '@/lib/types';
 import { CONTAINERS, LCL_SUGGEST_BELOW_KG, PRESET_LABELS } from '@/lib/constants';
 import { palletCountLabel } from '@/lib/format';
+import { stackWarningKind } from '@/lib/engine/floorPlan';
 
 interface Props {
   result: ShipmentResult;
@@ -171,12 +172,21 @@ export default function ContainerSummaryCard({ result, customerName, orderRef }:
 
       {result.warnings.length > 0 && (
         <div className="mt-4 space-y-1.5">
-          {result.warnings.map((w, i) => (
-            <div key={i} className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              <span className="text-amber-500 mt-0.5 text-xs">⚠</span>
-              <p className="text-xs text-amber-800">{w}</p>
-            </div>
-          ))}
+          {result.warnings.map((w, i) => {
+            // Stack warnings: orange for an overload, red outline for a stack taller than the container
+            const kind = stackWarningKind(w);
+            const tone = kind === 'height-overflow'
+              ? { box: 'bg-white border-dashed border-red-400', icon: 'text-red-600', text: 'text-red-700' }
+              : kind === 'overload'
+                ? { box: 'bg-orange-50 border-orange-300', icon: 'text-orange-600', text: 'text-orange-800' }
+                : { box: 'bg-amber-50 border-amber-200', icon: 'text-amber-500', text: 'text-amber-800' };
+            return (
+              <div key={i} className={`flex items-start gap-2 border rounded-lg px-3 py-2 ${tone.box}`}>
+                <span className={`mt-0.5 text-xs ${tone.icon}`}>⚠</span>
+                <p className={`text-xs ${tone.text}`}>{w}</p>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

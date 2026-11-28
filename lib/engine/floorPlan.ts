@@ -1,5 +1,6 @@
 import { PalletPlan, PalletPositions, PlacedPallet } from '@/lib/types';
-import { stackingProblem } from '@/lib/engine/stacking';
+import { MAX_STACKED_HEIGHT_MM } from '@/lib/engine/stacking';
+import { MAX_STACKABLE_PALLET_KG, MAX_STACKED_PAIR_KG } from '@/lib/constants';
 
 export type { PlacedPallet };
 
@@ -348,7 +349,9 @@ export function overlaps(a: PlacedPallet, b: PlacedPallet): boolean {
   );
 }
 
-export type LayoutIssueKind = 'overlap' | 'outside' | 'overweight';
+// overload (orange): a stack over a weight limit or the forklift clearance height;
+// height-overflow (red): a stack taller than the container interior
+export type LayoutIssueKind = 'overlap' | 'outside' | 'overweight' | 'overload' | 'height-overflow';
 
 export interface LayoutIssue {
   kind: LayoutIssueKind;
@@ -358,14 +361,94 @@ export interface LayoutIssue {
   message: string;
 }
 
-// Why two overlapping footprints can't simply be stacked: a footprint that is
-// already a pair can't take a third pallet; otherwise the stacking rules, with
-// the heavier pallet as the bottom. Null when they could be stacked.
+// Why two overlapping footprints can't be stacked by hand. Only the hard rules
+// block: a footprint that is already a pair can't take a third pallet, the top
+// must fit on the bottom (the heavier pallet always goes at the bottom), and
+// consignees stay apart. Weight and height limits never block a hand-made stack;
+// stackWarnings flags them instead. The engine keeps its own stricter rules
+// (stackingProblem). Null when they can be stacked.
 export function stackRefusal(a: PlacedPallet, b: PlacedPallet): string | null {
   const pair = [a, b].find(p => p.stackedPallet);
   if (pair) return `${footprintLabel(pair)} is already a stacked pair (no triple stacking)`;
   const [bottom, top] = a.pallet.totalGrossKg >= b.pallet.totalGrossKg ? [a.pallet, b.pallet] : [b.pallet, a.pallet];
-  return stackingProblem(bottom, top);
+  if (top.lengthMm > bottom.lengthMm || top.widthMm > bottom.widthMm) {
+    return `${top.palletId} (${top.lengthMm}×${top.widthMm}mm) doesn't fit on ${bottom.palletId} (${bottom.lengthMm}×${bottom.widthMm}mm)`;
+  }
+  if ((bottom.customer ?? '') !== (top.customer ?? '')) {
+    return `${top.palletId} and ${bottom.palletId} belong to different customers`;
+  }
+  return null;
+}
+
+// Interior height of every container (mm): a stack taller than this sticks out
+export const CONTAINER_INNER_HEIGHT_MM = CONTAINERS.FCL_20FT.HEIGHT;
+
+function fmt(n: number): string {
+  return Math.round(n).toLocaleString('en-US');
+}
+
+export interface StackWarning {
+  kind: 'overload' | 'height-overflow';
+  message: string;
+}
+
+// Limits a stacked pair breaks, as warnings (none for a single pallet):
+// overload when the pair or either pallet is over its stacking weight limit or
+// the pair is over the forklift clearance height; height-overflow when the pair
+// is taller than the container interior.
+export function stackWarnings(p: PlacedPallet): StackWarning[] {
+  const top = p.stackedPallet;
+  if (!top) return [];
+  const bottom = p.pallet;
+  const label = `Stack [${footprintLabel(p)}]`;
+  const out: StackWarning[] = [];
+  const pairKg = bottom.totalGrossKg + top.totalGrossKg;
+  if (Math.round(pairKg - MAX_STACKED_PAIR_KG) > 0) {
+    out.push({
+      kind: 'overload',
+      message: `${label}: ${fmt(pairKg)} kg loaded, limit ${fmt(MAX_STACKED_PAIR_KG)} kg — overloaded by ${fmt(pairKg - MAX_STACKED_PAIR_KG)} kg`,
+    });
+  }
+  for (const pallet of [bottom, top]) {
+    if (Math.round(pallet.totalGrossKg - MAX_STACKABLE_PALLET_KG) > 0) {
+      out.push({
+        kind: 'overload',
+        message: `${label}: ${pallet.palletId} is ${fmt(pallet.totalGrossKg)} kg, limit ${fmt(MAX_STACKABLE_PALLET_KG)} kg for a stacked pallet — overloaded by ${fmt(pallet.totalGrossKg - MAX_STACKABLE_PALLET_KG)} kg`,
+      });
+    }
+  }
+  const heightMm = bottom.heightMm + top.heightMm;
+  if (heightMm > CONTAINER_INNER_HEIGHT_MM) {
+    out.push({
+      kind: 'height-overflow',
+      message: `${label}: stacked height ${fmt(heightMm)} mm — overflows container by ${fmt(heightMm - CONTAINER_INNER_HEIGHT_MM)} mm`,
+    });
+  } else if (heightMm > MAX_STACKED_HEIGHT_MM) {
+    out.push({
+      kind: 'overload',
+      message: `${label}: stacked height ${fmt(heightMm)} mm — over the ${fmt(MAX_STACKED_HEIGHT_MM)} mm forklift clearance limit by ${fmt(heightMm - MAX_STACKED_HEIGHT_MM)} mm`,
+    });
+  }
+  return out;
+}
+
+// Stack warnings are written into a result's warnings list (summary card, saved
+// record); this marks them so they can be replaced when the layout changes
+const STACK_WARNING_RE = /^Stack \[/;
+
+// Which kind of stack warning a result warning is, or null for any other warning
+export function stackWarningKind(message: string): StackWarning['kind'] | null {
+  if (!STACK_WARNING_RE.test(message)) return null;
+  return /overflows container/.test(message) ? 'height-overflow' : 'overload';
+}
+
+// The result's warnings with the stack warnings for this floor in place of any
+// earlier ones
+export function withStackWarnings(warnings: string[], placed: PlacedPallet[]): string[] {
+  return [
+    ...warnings.filter(w => !STACK_WARNING_RE.test(w)),
+    ...placed.flatMap(p => stackWarnings(p).map(w => w.message)),
+  ];
 }
 
 // Footprint label: "SK-03", or "SK-03 + SK-07" for a stacked pair
@@ -373,8 +456,8 @@ export function footprintLabel(p: PlacedPallet): string {
   return p.stackedPallet ? `${p.pallet.palletId} + ${p.stackedPallet.palletId}` : p.pallet.palletId;
 }
 
-// Problems with a layout: footprints overlapping, footprints off the floor, and
-// pallets over the preset's weight cap
+// Problems with a layout: footprints overlapping, footprints off the floor,
+// stacks over a weight or height limit, and pallets over the preset's weight cap
 export function validateLayout(
   placed: PlacedPallet[],
   containerLength: number,
@@ -414,6 +497,11 @@ export function validateLayout(
             `No free floor space was left; it is placed ${out.toLocaleString('en-US')}mm past the container floor.`
           : `[${footprintLabel(p)}] extends ${out.toLocaleString('en-US')}mm outside the container floor.`,
       });
+    }
+  }
+  for (const p of placed) {
+    for (const w of stackWarnings(p)) {
+      issues.push({ kind: w.kind, severity: 'warning', palletIds: [p.pallet.palletId], message: w.message });
     }
   }
   for (const p of placed) {

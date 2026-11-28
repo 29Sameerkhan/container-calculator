@@ -11,7 +11,7 @@ import ContainerViewTabs from '@/components/calculator/ContainerViewTabs';
 import { OrderItem, PalletPositions, RulePreset, ShipmentOrder, ShipmentResult } from '@/lib/types';
 import PresetSelector from '@/components/calculator/PresetSelector';
 import { DEFAULT_PRESET, isRulePreset, PRESET_CONFIGS } from '@/lib/constants';
-import { applyPositions, floorLayout, validateLayout, withStackFields } from '@/lib/engine/floorPlan';
+import { applyPositions, floorLayout, validateLayout, withStackFields, withStackWarnings } from '@/lib/engine/floorPlan';
 import ShareLinkButton from '@/components/calculator/ShareLinkButton';
 import { exportPlanPdf, planPdfFilename, planShareUrlForPdf } from '@/lib/exportPlanPdf';
 import { PdfCompanyHeader, PdfCoverDetails, PdfOrderLines } from '@/components/calculator/PdfOrderSheet';
@@ -98,13 +98,27 @@ async function runEngine(submitOrders: ShipmentOrder[], preset: RulePreset): Pro
 
 // The result as it should be stored: hand-moved floor positions and hand-made
 // stacks written into placed (and the pallets' stack fields), so history, the
-// share link and the PDF all draw the edited layout
+// share link and the PDF all draw the edited layout. Stacks over a weight or
+// height limit add their warnings to the result's list.
 function withLayout(result: ShipmentResult, positions: PalletPositions): ShipmentResult {
   if (Object.keys(positions).length === 0) return result;
   const layout = floorLayout(result.pallets, result.containerRecommendation, result.placed);
   if (!layout) return result;
   const placed = applyPositions(layout.placed, positions, layout.containerLength);
-  return { ...result, pallets: withStackFields(result.pallets, placed), placed, manualLayout: true };
+  return {
+    ...result,
+    pallets: withStackFields(result.pallets, placed),
+    placed,
+    manualLayout: true,
+    warnings: withStackWarnings(result.warnings, placed),
+  };
+}
+
+// The result's warnings with the current floor's stack warnings, for the summary card
+function liveWarnings(result: ShipmentResult, positions: PalletPositions): string[] {
+  const layout = floorLayout(result.pallets, result.containerRecommendation, result.placed);
+  if (!layout) return result.warnings;
+  return withStackWarnings(result.warnings, applyPositions(layout.placed, positions, layout.containerLength));
 }
 
 const INPUT_CLASS =
@@ -589,7 +603,11 @@ function DashboardInner() {
             />
             {/* On screen: the selected preset. The PDF has its own section per preset. */}
             <div data-pdf-hide className="space-y-4">
-              <ContainerSummaryCard result={result} customerName={displayName} orderRef={displayRef} />
+              <ContainerSummaryCard
+                result={{ ...result, warnings: liveWarnings(result, positions) }}
+                customerName={displayName}
+                orderRef={displayRef}
+              />
             </div>
             <PdfOrderLines orders={calculatedOrders} />
             <div data-pdf-hide>
